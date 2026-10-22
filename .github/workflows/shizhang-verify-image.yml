@@ -59,6 +59,48 @@ jobs:
           Path('artifacts/test-summary.json').write_text(json.dumps(counts, indent=2))
           print(json.dumps(counts))
           PY
+      - name: Verify existing OCR table migration preserves synthetic data
+        run: |
+          docker run --rm -i --network none --cpus 1 --memory 512m \
+            --tmpfs /data:rw,size=128m --tmpfs /tmp:rw,size=128m \
+            -e DATABASE_URL=sqlite:////tmp/legacy.db \
+            -e JWT_SECRET=synthetic-ci-only-secret-at-least-32-bytes \
+            -e BACKUP_SCHEDULER_ENABLED=false \
+            shizhang-cloud:verify python - <<'PY'
+          import hashlib, json, sqlite3
+          from alembic import command
+          from alembic.config import Config
+          from sqlalchemy.orm import Session
+          from src.database import engine
+          from src.models import User, Ledger
+          from src.services.ocr_capture import OcrCapture
+          config = Config('alembic.ini')
+          command.upgrade(config, '0020_category_parent_links')
+          # The managed overlay rollout already created this table outside Alembic.
+          OcrCapture.__table__.create(engine)
+          with Session(engine) as session:
+              session.add(User(id='synthetic-user', email='migration@example.invalid', password_hash='synthetic-unused'))
+              session.flush()
+              session.add(Ledger(id='synthetic-ledger', user_id='synthetic-user', external_id='synthetic', name='Synthetic'))
+              session.flush()
+              session.add(OcrCapture(id='synthetic-capture', user_id='synthetic-user', ledger_id='synthetic-ledger', request_id='synthetic-request', request_hash='0'*64, text='Synthetic pending capture', reason='synthetic', status='pending'))
+              session.commit()
+          engine.dispose()
+          def fingerprint():
+              with sqlite3.connect('/tmp/legacy.db') as connection:
+                  schema = connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall()
+                  names = [r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name!='alembic_version' ORDER BY name")]
+                  rows = {name: connection.execute('SELECT * FROM "'+name.replace('"','""')+'" ORDER BY rowid').fetchall() for name in names}
+              return hashlib.sha256(json.dumps([schema,rows],sort_keys=True).encode()).hexdigest()
+          before = fingerprint()
+          command.upgrade(config, 'head')
+          assert fingerprint() == before, 'Migration changed existing schema or data'
+          command.upgrade(config, 'head')
+          assert fingerprint() == before, 'Repeated upgrade changed schema or data'
+          with sqlite3.connect('/tmp/legacy.db') as connection:
+              assert connection.execute('SELECT version_num FROM alembic_version').fetchone()[0] == '0021_ocr_captures'
+          print(json.dumps({'from':'0020_category_parent_links','to':'0021_ocr_captures','schema_and_rows_unchanged':True,'repeat_upgrade_unchanged':True}))
+          PY
       - name: Verify startup and migrations on a disposable database
         run: |
           docker run -d --name shizhang-isolated-smoke \
