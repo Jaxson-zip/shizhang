@@ -64,7 +64,10 @@ def load_ocr_preferences(raw: str | None, ledger_id: str) -> dict:
 def payment_channel(text: str) -> str | None:
     """Only explicit channel evidence; a bare balance/card label is insufficient."""
     compact = re.sub(r'\s+', '', unicodedata.normalize('NFKC', text))
-    wechat = any(marker in compact for marker in ('微信支付', '微信转账', '财付通', '零钱明细'))
+    # The whole accepted-transfer status sentence is WeChat-only; a bare '零钱' label still is not.
+    wechat = (any(marker in compact for marker in ('微信支付', '微信转账', '财付通', '零钱明细'))
+              or bool(_ACCEPTED_TRANSFER.search('\n'.join(line.strip() for line in
+                                                         unicodedata.normalize('NFKC', text).splitlines()))))
     if not wechat:
         normalized = unicodedata.normalize('NFKC', text)
         normalized = '\n'.join(line.strip() for line in normalized.splitlines() if line.strip())
@@ -247,10 +250,67 @@ def _restore_displaced_columns(text: str) -> tuple[str, bool]:
     return '\n'.join(restored), True
 
 
+# WeChat status shown right after accepting a transfer; NFKC turns the full-width comma into ','.
+_ACCEPTED_TRANSFER = re.compile(r"(?m)^你已收款[ \t]*,?[ \t]*\n?[ \t]*资金已存入零钱$")
+_PERSONAL_DATE = r"\d{4}(?:年|-|/)\d{1,2}(?:月|-|/)\d{1,2}日?[ T]+\d{1,2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?"
+
+
+def _personal_stamp(raw: str) -> str:
+    raw = raw.replace('年', '-').replace('月', '-').replace('日', ' ').replace('/', '-')
+    raw = re.sub(r"\s+", " ", raw).strip()
+    raw = re.sub(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?=[ T])",
+                 lambda m: f"{m[1]}-{int(m[2]):02d}-{int(m[3]):02d}", raw)
+    raw = re.sub(r"([ T])(\d)(?=:\d{2})", lambda m: m[1] + m[2].zfill(2), raw, count=1)
+    try:
+        stamp = datetime.fromisoformat(raw)
+        if not re.search(r"\d{1,2}:\d{2}", raw):
+            raise ValueError
+        return (stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone(timedelta(hours=8)))).isoformat()
+    except ValueError:
+        raise PaymentTextError("个人收付款时间格式不明确，请核对详情") from None
+
+
+def _accepted_transfer(text: str, accounts, funding_aliases) -> dict:
+    """WeChat '你已收款，资金已存入零钱' page: one unsigned ¥ headline and a received time; no counterparty shown."""
+    # Known two-label column: both labels first, then their values in the same order.
+    text = re.sub(rf"(?m)^(转账时间|收款时间)\n(转账时间|收款时间)\n({_PERSONAL_DATE})\n({_PERSONAL_DATE})$",
+                  lambda m: f"{m[1]} {m[3]}\n{m[2]} {m[4]}" if m[1] != m[2] else m[0], text)
+    compact = re.sub(r"\s+", "", text)
+    if re.search(r"失败|退款|待收款|未收款|已退还|已退回|交易关闭|USD|EUR|HKD|JPY|美元|欧元|港币|日元|\$|€", compact, re.I):
+        raise PaymentTextError("个人收付款状态或币种不支持，请使用手动表单核对")
+    amounts = re.findall(r"(?m)^[¥￥][ \t]*(\d+(?:\.\d{1,2})?)$", text)
+    signed = re.findall(r"(?m)^[+−-][ \t]*[¥￥]?[ \t]*\d", text)
+    if len(amounts) != 1 or signed:
+        raise PaymentTextError("收款金额不明确，请核对截图")
+    amount = Decimal(amounts[0])
+    if amount <= 0 or amount > 1_000_000_000:
+        raise PaymentTextError("个人收付款金额超出支持范围")
+    times = _values(text, "收款时间|到账时间")
+    if len(times) > 1:
+        raise PaymentTextError("个人收付款时间有多项，请核对详情")
+    # The sender's transfer time is never a substitute for a missing received time.
+    happened_at = _personal_stamp(times[0]) if times else ""
+    wallet = (funding_aliases or {}).get("零钱", "零钱")  # explicit destination in the status line
+    matched = [name for name, currency in accounts if wallet == name and (currency or 'CNY') == 'CNY']
+    return {
+        "engine": "rules", "requires_confirmation": True,
+        "receipt_kind": "personal_incoming", "source_id": None,
+        "warnings": ["个人往来用途需核对；不会自动作为消费或收入保存"],
+        "tx_drafts": [{"type": "income", "amount": float(amount), "currency": "CNY",
+                       "happened_at": happened_at, "category_name": "", "account_name": matched[0] if len(matched) == 1 else "",
+                       "from_account_name": None, "to_account_name": None,
+                       "note": "微信转账收款", "tags": [], "confidence": "medium"}],
+    }
+
+
 def _personal_review(text: str, accounts, funding_aliases) -> dict | None:
     """Two explicit personal receipt families, always reviewed, never unattended writes."""
     incoming = re.findall(r"(?m)^转账[ \t]*[-—][ \t]*来自([^\n:]{1,120})$", text)
     group = re.findall(r"(?m)^群收款[ \t]*[-—][ \t]*转给([^\n:]{1,120})$", text)
+    if _ACCEPTED_TRANSFER.search(text):
+        if incoming or group:
+            raise PaymentTextError("发现多笔个人收付款，请一次采集一笔")
+        return _accepted_transfer(text, accounts, funding_aliases)
     if not incoming and not group:
         return None
     if len(incoming) + len(group) != 1:
