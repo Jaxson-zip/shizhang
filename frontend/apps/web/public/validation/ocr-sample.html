@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>合成测试 · 手机 OCR 采集样例</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f5f7; color: #17202b; font: 16px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+    main { max-width: 430px; margin: auto; padding: max(14px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom)); }
+    .label { margin: 0 0 12px; color: #465569; font-size: 14px; text-align: center; }
+    article { padding: 20px 18px; background: white; border: 1px solid #dce1e7; border-radius: 18px; }
+    h1 { margin: 0; font-size: 22px; text-align: center; }
+    .status { margin: 6px 0 14px; color: #166534; text-align: center; }
+    .amount-label { margin: 0; color: #465569; text-align: center; }
+    .amount { margin: 0 0 16px; font-size: 40px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: center; }
+    dl { margin: 0; padding-top: 12px; border-top: 1px dashed #c8d0da; line-height: 1.5; }
+    .field + .field { margin-top: 12px; }
+    dt { display: inline; color: #465569; }
+    dd { display: inline; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+    .note { margin: 16px 0; color: #465569; font-size: 14px; }
+    a { display: block; min-height: 44px; padding: 10px 0; color: #174d8a; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="label">合成测试 · 非真实消费</p>
+    <article aria-label="合成支付样例">
+      <h1>微信支付</h1>
+      <p class="status">支付成功</p>
+      <p class="amount-label">实付金额</p>
+      <p class="amount">￥0.01</p>
+      <dl>
+        <div class="field"><dt>商家名称：</dt><dd>[合成测试] 手机OCR验证</dd></div>
+        <div class="field"><dt>付款方式：</dt><dd>零钱</dd></div>
+        <div class="field"><dt>交易时间：</dt><dd id="time">正在生成</dd></div>
+        <div class="field"><dt>交易单号：</dt><dd id="order">正在生成</dd></div>
+      </dl>
+    </article>
+    <p class="note">此页只生成识别样例，不会自动写入账本。运行已配置的采集快捷指令后，才能检验是否入账。</p>
+    <p class="note">刷新会产生新测试单号。验证重复识别时，请使用同一张截图。</p>
+    <a href="/app/transactions">返回账目列表</a>
+  </main>
+  <script>
+    const now = new Date();
+    document.getElementById('time').textContent = new Date(now.getTime() + 8 * 3600000).toISOString().slice(0,19).replace('T',' ');
+    const random = new Uint32Array(1);
+    crypto.getRandomValues(random);
+    document.getElementById('order').textContent = 'TST' + now.getTime().toString(36).toUpperCase() + random[0].toString(36).slice(0,2).toUpperCase();
+  </script>
+</body>
+</html>

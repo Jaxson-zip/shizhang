@@ -1,0 +1,15 @@
+拾账 / Shizhang
+个人记账定制版本，基于 BeeCount Cloud 修改。
+
+上游：BeeCount Cloud / BeeCount
+作者：sunxiao（GitHub: TNT-Likely）
+版权所有 (c) 2024-2026 sunxiao
+https://github.com/TNT-Likely/BeeCount-Cloud
+https://github.com/TNT-Likely/BeeCount
+
+原始许可完整保留于 LICENSE.txt 与 LICENSE_EN.txt。
+定制范围：品牌、Web/PWA 手机界面、OCR 采集、视觉补读待核对与原生设施适配。
+官方 BeeCount TestFlight 客户端不是本定制 Web/PWA 的原生安装包。
+
+修改版源码：https://github.com/Jaxson-zip/shizhang
+修改版须公开源码；商业使用须先取得原作者书面商业授权。

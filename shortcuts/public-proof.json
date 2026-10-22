@@ -1,0 +1,24 @@
+{
+  "template": "Shizhang OCR public v9",
+  "import_fields": [
+    "server",
+    "email",
+    "ledger",
+    "password"
+  ],
+  "defaults_empty": true,
+  "required_fields_stop_before_login": true,
+  "native_api_paths": [
+    "/api/v1/auth/login",
+    "/api/v1/ai/record-ocr-text",
+    "/api/v1/auth/logout"
+  ],
+  "unsigned_sha256": "64c657db489017cebfa0f1f1c4ae2f94839bd42d2210df24d92a64350eabcad7",
+  "signed_sha256": "49c5ba803cd30d983a4800c39058fd2677276efbe86241784a1d1ebefd43dc10",
+  "signed_bytes": 27485,
+  "signer": "https://hubsign.routinehub.services/sign",
+  "certificate_chain": "signatures checked; root matches prior verified Apple Root CA G3 chain",
+  "signed_payload_independent_decode": "not-run",
+  "physical_iPhone_import_and_capture": "not-run",
+  "production_deployment": "not-run"
+}

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <link rel="icon" type="image/png" href="/branding/shizhang-art-v2-32.png" />
+    <!-- PWA 基础：manifest + iOS Safari 的兼容 meta。sw 在 main.tsx 里注册。 -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#24624F" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="拾账" />
+    <link rel="apple-touch-icon" href="/branding/shizhang-art-v2-180.png" />
+    <!-- Bundled native icon subset: same-origin loading, Apache-2.0 license in /icons/. -->
+    <link rel="stylesheet" href="/icons/material-symbols.css" />
+    <title>拾账 · 个人记账</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

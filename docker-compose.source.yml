@@ -1,0 +1,23 @@
+# Independent source build for a NEW local/test instance.
+# Existing production data paths and backup jobs require a separate reviewed deployment plan.
+services:
+  beecount-cloud:
+    image: shizhang-cloud:${SHIZHANG_VERSION:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${SHIZHANG_VERSION:-dev}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SHIZHANG_PORT:-8869}:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      APP_NAME: 拾账
+      JWT_SECRET: ${JWT_SECRET:?Set a private JWT_SECRET of at least 32 random bytes}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      TZ: Asia/Shanghai
+      ALLOW_APP_RW_SCOPES: "true"

@@ -1,0 +1,303 @@
+{
+  "id": "/?source=pwa",
+  "name": "拾账",
+  "name_localized": {
+    "zh-TW": {
+      "value": "拾帳",
+      "lang": "zh-TW",
+      "dir": "ltr"
+    },
+    "en": {
+      "value": "Shizhang",
+      "lang": "en-US",
+      "dir": "ltr"
+    }
+  },
+  "short_name": "拾账",
+  "short_name_localized": {
+    "zh-TW": {
+      "value": "拾帳",
+      "lang": "zh-TW",
+      "dir": "ltr"
+    },
+    "en": {
+      "value": "Shizhang",
+      "lang": "en-US",
+      "dir": "ltr"
+    }
+  },
+  "description": "拾账，你自己的生活账本。记录收支、整理账户，手机与电脑查看同一本账。",
+  "description_localized": {
+    "zh-TW": {
+      "value": "拾帳，你自己的生活帳本。記錄收支、整理帳戶，手機與電腦查看同一本帳。",
+      "lang": "zh-TW",
+      "dir": "ltr"
+    },
+    "en": {
+      "value": "Your everyday ledger. Entries, accounts and one ledger across phone and computer.",
+      "lang": "en-US",
+      "dir": "ltr"
+    }
+  },
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ],
+  "orientation": "any",
+  "background_color": "#FAF9F6",
+  "theme_color": "#24624F",
+  "categories": [
+    "finance",
+    "productivity",
+    "utilities"
+  ],
+  "launch_handler": {
+    "client_mode": [
+      "focus-existing",
+      "auto"
+    ]
+  },
+  "icons": [
+    {
+      "src": "/branding/shizhang-art-v2-128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/branding/shizhang-art-v2-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/branding/shizhang-art-v2-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/branding/shizhang-art-v2-216.png",
+      "sizes": "216x216",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/branding/shizhang-art-v2-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "记一笔",
+      "name_localized": {
+        "zh-TW": {
+          "value": "記一筆",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Add Transaction",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "short_name": "记账",
+      "short_name_localized": {
+        "zh-TW": {
+          "value": "記帳",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Bookkeeping",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "description": "快速新建一笔交易",
+      "description_localized": {
+        "zh-TW": {
+          "value": "快速新增一筆交易",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Quickly add a transaction",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "url": "/app/transactions?action=quick-add&source=shortcut",
+      "icons": [
+        {
+          "src": "/branding/shizhang-art-v2-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "今日账单",
+      "name_localized": {
+        "zh-TW": {
+          "value": "今日帳單",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Today's Transactions",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "short_name": "今日",
+      "short_name_localized": {
+        "zh-TW": {
+          "value": "今日",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Today",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "description": "查看今天的所有交易",
+      "description_localized": {
+        "zh-TW": {
+          "value": "查看今天的所有交易",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "View all transactions from today",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "url": "/app/transactions?range=today&source=shortcut",
+      "icons": [
+        {
+          "src": "/branding/shizhang-art-v2-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "本月预算",
+      "name_localized": {
+        "zh-TW": {
+          "value": "本月預算",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "This Month's Budget",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "short_name": "预算",
+      "short_name_localized": {
+        "zh-TW": {
+          "value": "預算",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "Budget",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "description": "查看本月预算执行情况",
+      "description_localized": {
+        "zh-TW": {
+          "value": "查看本月預算執行情況",
+          "lang": "zh-TW",
+          "dir": "ltr"
+        },
+        "en": {
+          "value": "View this month's budget status",
+          "lang": "en-US",
+          "dir": "ltr"
+        }
+      },
+      "url": "/app/budgets?source=shortcut",
+      "icons": [
+        {
+          "src": "/branding/shizhang-art-v2-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "share_target": {
+    "action": "/share-receive",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "image/*",
+            "text/csv",
+            ".csv",
+            ".xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          ]
+        }
+      ]
+    }
+  },
+  "file_handlers": [
+    {
+      "action": "/app/share-incoming?source=file-handler",
+      "accept": {
+        "text/csv": [
+          ".csv"
+        ],
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [
+          ".xlsx"
+        ],
+        "application/vnd.ms-excel": [
+          ".xls"
+        ]
+      },
+      "icons": [
+        {
+          "src": "/branding/shizhang-art-v2-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ],
+      "launch_type": "single-client"
+    }
+  ],
+  "edge_side_panel": {
+    "preferred_width": 480
+  },
+  "protocol_handlers": [
+    {
+      "protocol": "web+beecount",
+      "url": "/?proto=%s"
+    }
+  ]
+}

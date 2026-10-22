@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer">
+<title>拾账 · 先记下，稍后核对</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#faf9f6;color:#272b30;font:16px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}main{max-width:620px;margin:auto;padding:max(28px,env(safe-area-inset-top)) 22px max(40px,env(safe-area-inset-bottom))}h1{font-size:30px;line-height:1.35;margin:12px 0 18px}h2{font-size:19px;margin:0 0 10px}p{margin:12px 0}a{color:#24624f;text-underline-offset:4px}.button{display:flex;align-items:center;justify-content:center;min-height:52px;padding:12px 16px;background:#24624f;color:white;border-radius:13px;font-weight:650;text-decoration:none;margin:24px 0 8px}.step{padding:22px 0;border-top:1px solid #deddd6}.muted{color:#626971;font-size:14px}.notice{background:#f0f4ef;padding:14px;border-radius:12px}:focus-visible{outline:3px solid #72550c;outline-offset:4px}</style>
+</head><body><main>
+<p class="muted">拾账 · iPhone 本地 OCR · v9 通用模板</p>
+<h1>付款后先记下，<br>方便时再核对</h1>
+<p>轻点背面截图后，先用 OCR 规则；不明确时，再交给你配置的视觉模型补读。OCR 规则明确的直接入账；使用视觉补读的结果一律先留待核对，确认后才计入统计。只显示结果通知，<strong>不再自动打开浏览器，也不用当场选择分类和账户</strong>。</p>
+<a class="button" href="/validation/BeeCount-OCR.shortcut?v=9-public" download="拾账OCR记账v9.shortcut">下载「拾账 OCR 记账 v9」</a>
+<p class="muted">已签名的通用模板，服务器、邮箱、账本 ID 与密码均为空；实体 iPhone 导入和运行待验证。</p>
+<section class="step"><h2>先配置一次视觉模型</h2><p>在<a href="/app/settings/ai">设置 → AI</a>添加智谱，接口地址填 https://open.bigmodel.cn/api/paas/v4，视觉模型填 glm-4.6v-flashx；填写你自己的 API Key，测试并保存，再将视觉能力绑定到该服务商。文字和语音模型可留空。没有配置时仍可 OCR 记账，未明确的信息会收下待核对。</p></section><section class="step"><h2>1. 添加一次新版</h2>
+<p>用 iPhone Safari 下载；若没有直接进入快捷指令，在 Safari 下载列表或“文件 → 下载项”点开它。添加时依次填写自己的拾账 HTTPS 地址（末尾无斜杠）、登录邮箱、账本 ID 和账号密码，<strong>不要填写服务器 root 密码</strong>，也不要在聊天里发送密码。</p>
+<p class="muted">模板名称为 Shizhang OCR public v9，可在快捷指令中重命名为“拾账 OCR 记账”。账本 ID 可在网页账本设置中查看；不要填写账本名称。填好资料的快捷指令不要分享。已有快捷指令可继续使用，不必为源码公开重新安装。</p></section>
+<section class="step"><h2>2. 切换轻点背面</h2>
+<p>在“设置 → 辅助功能 → 触控 → 轻点背面 → 轻点两下”选择刚添加的“Shizhang OCR public v9”或你重命名后的“拾账 OCR 记账”。停留在微信付款成功页或详情页，触发一次即可。首次运行仍可能出现 iOS 的权限询问。</p></section>
+<section class="step"><h2>3. 晚点回来看</h2>
+<p>明确的普通消费照常入账。识别出明确金额、方向、时间和账户，但还需核对用途或信息的，会先记账，留在<a href="/app/overview">首页“稍后核对”</a>；这些待核对账目暂不计收支和预算统计，账户余额会反映已记录的资金方向。</p>
+<p>连金额、方向、时间或账户都没认清的，先收下识别内容，不猜一笔写进收支。首页会标明“已收下 · 尚未入账”，与已记账的笔数分开。核对时补全一次，已记账的只编辑原记录，不另加一笔。</p></section>
+<p class="notice">通知里“已入账”和“已收下”含义不同。网络报错、未获得确认时，先在账本查看；请求没到服务器，就不能保证已收下。当前没有离线采集队列。</p>
+<p class="muted">每次主动轻点背面是一次新操作；不会按同金额或同截图合并真实交易。同一次请求重发沿原编号处理。晚上只需回看待核对内容，不会把原来明确记好的账目全部变成待审核。</p>
+<p class="muted">明确的付款时间保留原时间；个人收款取到账时间。严格限定的简版结果页缺时间时，沿用首次提交时间的约定；其他未知时间不会普遍替换成当前时间。</p>
+<p class="muted">截图先在 iPhone 本地提取文字，并压缩后与文字一起发送到你的拾账服务器。只有 OCR 规则仍不明确时，服务器才将该张截图发送给你在“设置 → AI”绑定的视觉服务商（例如智谱；沿用你自己的视觉能力绑定）。Key 保留在账户配置，不放进快捷指令；仅待核对内容暂存不超过1MB的压缩图，7天到期，每小时清理；核对或忽略后删除。每人20MB、全站128MB，超额先清最旧截图，文字和账目保留；临时图不进入长期备份。模型超时、限流或补读后仍冲突时，留待稍后核对。模板使用原生快捷指令动作，HubSign 只签署未填写服务器、账号、账本和密码的公开模板。微信和支付宝需分别在实体 iPhone 验证。</p>
+</main></body></html>
