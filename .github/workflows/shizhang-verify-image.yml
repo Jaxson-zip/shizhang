@@ -23,7 +23,7 @@ jobs:
           docker run --name shizhang-backend-check --network none --cpus 1 --memory 512m \
             --tmpfs /data:rw,size=128m --tmpfs /tmp:rw,size=256m \
             -e APP_ENV=test -e PYTHONDONTWRITEBYTECODE=1 \
-            -e DATABASE_URL=sqlite:///:memory: \
+            -e DATABASE_URL=sqlite:////tmp/shizhang-suite.db \
             -e JWT_SECRET=synthetic-ci-only-secret-at-least-32-bytes \
             -e BACKUP_SCHEDULER_ENABLED=false \
             -e ALLOW_APP_RW_SCOPES=false \
@@ -33,7 +33,7 @@ jobs:
             -v "$PWD/frontend:/app/frontend:ro" \
             -v "$PWD/docs:/app/docs:ro" \
             -v "$PWD/pytest.ini:/app/pytest.ini:ro" \
-            shizhang-cloud:verify python -m pytest -x -vv --tb=short -p no:cacheprovider tests
+            shizhang-cloud:verify python -c 'import src.models,src.services.ocr_capture; from src.database import Base,engine; Base.metadata.create_all(engine); import pytest; raise SystemExit(pytest.main(["-x","-vv","--tb=short","-p","no:cacheprovider","tests"]))'
           result=$?
           docker inspect shizhang-backend-check --format '{"oom_killed":{{.State.OOMKilled}},"exit_code":{{.State.ExitCode}}}'
           docker rm shizhang-backend-check
