@@ -104,3 +104,9 @@ def test_channel_mode_books_the_received_transfer_once_as_counted_income():
     finally:
         client.close()
         app.dependency_overrides.clear()
+
+
+def test_star_misread_currency_glyph_on_the_received_page_is_the_yen_headline():
+    # 2026-10-22 capture: Apple OCR read the ¥ before the received amount as '*'.
+    draft = parse(INLINE.replace('¥48.00', '*48.00'))['tx_drafts'][0]
+    assert draft['type'] == 'income' and draft['amount'] == 48

@@ -255,6 +255,35 @@ _ACCEPTED_TRANSFER = re.compile(r"(?m)^你已收款[ \t]*,?[ \t]*\n?[ \t]*资金
 _PERSONAL_DATE = r"\d{4}(?:年|-|/)\d{1,2}(?:月|-|/)\d{1,2}日?[ T]+\d{1,2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?"
 
 
+_BILL_LABELS = {'当前状态', '支付时间', '付款时间', '交易时间', '商品', '商户全称', '收单机构', '支付方式',
+                '付款方式', '交易单号', '商户单号', '经营单号', '收款方备注', '收款详情'}
+_BILL_DATETIME = re.compile(r"^(\d{4}(?:年\d{1,2}月\d{1,2}日[ T]*|[-/]\d{1,2}[-/]\d{1,2}[ T]+)\d{1,2}:\d{2}(?::\d{2})?)")
+
+
+def _wechat_bill_column(lines: list[str]) -> tuple[str, str] | None:
+    """A labels-then-values WeChat bill whose values wrapped, so no table can be restored.
+
+    Use only facts that do not depend on pairing a value with its label: the single success
+    status, and the single date-time on the page when the label column has exactly one time
+    field. Amount and payee still come from the headline debit and title.
+    """
+    if '当前状态' not in lines:
+        return None
+    start = lines.index('当前状态')
+    end = start
+    while end < len(lines) and lines[end] in _BILL_LABELS:
+        end += 1
+    block = lines[start:end]
+    times = [label for label in block if label.endswith('时间')]
+    if len(block) < 4 or len(times) != 1:
+        return None
+    states = [line for line in lines if line in {'支付成功', '付款成功', '交易成功'}]
+    stamps = [m[1] for line in lines if (m := _BILL_DATETIME.match(line))]
+    if len(states) != 1 or lines.index(states[0]) < end:
+        return None
+    return states[0], stamps[0] if len(stamps) == 1 else ""  # none or ambiguous: left for review
+
+
 def _personal_stamp(raw: str) -> str:
     raw = raw.replace('年', '-').replace('月', '-').replace('日', ' ').replace('/', '-')
     raw = re.sub(r"\s+", " ", raw).strip()
@@ -278,7 +307,9 @@ def _accepted_transfer(text: str, accounts, funding_aliases) -> dict:
     compact = re.sub(r"\s+", "", text)
     if re.search(r"失败|退款|待收款|未收款|已退还|已退回|交易关闭|USD|EUR|HKD|JPY|美元|欧元|港币|日元|\$|€", compact, re.I):
         raise PaymentTextError("个人收付款状态或币种不支持，请使用手动表单核对")
-    amounts = re.findall(r"(?m)^[¥￥][ \t]*(\d+(?:\.\d{1,2})?)$", text)
+    # Apple OCR has read this headline ¥ as '*' (2026-10-22). Direction comes from the
+    # '你已收款' status, not from the symbol, so the misread cannot flip it.
+    amounts = re.findall(r"(?m)^[¥￥*][ \t]*(\d+(?:\.\d{1,2})?)$", text)
     signed = re.findall(r"(?m)^[+−-][ \t]*[¥￥]?[ \t]*\d", text)
     if len(amounts) != 1 or signed:
         raise PaymentTextError("收款金额不明确，请核对截图")
@@ -444,10 +475,15 @@ def parse_payment_text(text: str, *, accounts: list[tuple[str, str | None]],
     bill_states = _values(text, "当前状态")
     bill_debits = re.findall(r"(?m)^((?:-[ \t]*[¥￥]?|[¥￥][ \t]*-)[ \t]*[\d,.]+)$", text)
     bill_times = _values(text, "支付时间|付款时间|交易时间")
+    column = _wechat_bill_column(lines) if not bill_states and not bill_times else None
+    column_time = column[1] if column else ""
+    if column:
+        bill_states, bill_times = [column[0]], [column_time]
     paid_bill = (bool({"账单", "交易详情"}.intersection(lines))
                  and len(bill_debits) == len(bill_states) == 1
                  and bill_states[0] in {"支付成功", "付款成功", "交易成功"}
-                 and len(bill_times) == 1 and bool(re.search(r"\d{1,2}:\d{2}", bill_times[0])))
+                 and (column is not None
+                      or len(bill_times) == 1 and bool(re.search(r"\d{1,2}:\d{2}", bill_times[0]))))
     # A known action under the bill-service section is not a refund status.
     # Keep every other line, including refund/transfer status in the footer;
     # never discard an arbitrary footer or a previous error dialog.
@@ -536,6 +572,16 @@ def parse_payment_text(text: str, *, accounts: list[tuple[str, str | None]],
         merchants += qr_merchants
     # Complete explicit labels take priority over an unlabelled display name.
     merchants += re.findall(r"(?m)^(?:商家名称|商户全称)([^\s:\n][^\n]*)$", text)
+    if not merchants and paid_bill and "全部账单" in lines and bill_debits[0] in lines:
+        # WeChat bill page: the payee is the title between 全部账单 and the debit.
+        # OCR may wrap a long title onto two lines; more than that is not one name.
+        top, debit_index = lines.index("全部账单"), lines.index(bill_debits[0])
+        titles = [line for line in lines[top + 1:debit_index] if line not in {"收", "支"}]
+        if 1 <= len(titles) <= 2 and all(
+                len(t) <= 120 and len(re.findall(r"[\u4e00-\u9fffA-Za-z]", t)) >= 2
+                and not re.match(r"^(?:当前状态|支付时间|付款时间|交易时间|支付方式|付款方式|交易单号|商户单号|账单|余额)", t)
+                for t in titles):
+            merchants = [" ".join(titles)]
     if not merchants and paid_bill and "交易详情" in lines:
         # A transaction-detail card can name the counterparty directly under
         # its debit, without a legal-merchant label. Require exactly one name
@@ -569,6 +615,8 @@ def parse_payment_text(text: str, *, accounts: list[tuple[str, str | None]],
     if campus_topup:
         warnings.append("已选择充值时计支出；以后校园卡刷卡请勿重复记支出，其他入口不会自动排除重复账目")
     times = _values(text, "交易时间|付款时间|支付时间")
+    if not times and column_time:
+        times = [column_time]
     if qr_payment:
         times += _values(text, "转账时间")
         if not times and text.splitlines().count('转账时间') == 1:
