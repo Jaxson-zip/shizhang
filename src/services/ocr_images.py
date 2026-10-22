@@ -14,7 +14,8 @@ from pathlib import Path
 from ..config import get_settings
 from .ai.payment_vision import image_data_url
 
-TTL_SECONDS = 7 * 86400
+TTL_SECONDS = 7 * 86400  # unresolved captures: the review window
+AUTO_TTL_SECONDS = 48 * 3600  # user decision 2026-10-22: auto-booked captures, for checking against the entry
 MAX_IMAGE_BYTES = 1024 * 1024
 USER_BYTES = 20 * 1024 * 1024
 TOTAL_BYTES = 128 * 1024 * 1024
@@ -52,7 +53,7 @@ def _connection():
         db.close()
 
 
-def retain(capture_id: str, user_id: str, encoded: str) -> bool:
+def retain(capture_id: str, user_id: str, encoded: str, ttl: int = TTL_SECONDS) -> bool:
     url = image_data_url(encoded)
     mime, payload = url.split(';base64,', 1)
     data = base64.b64decode(payload, validate=True)
@@ -62,20 +63,20 @@ def retain(capture_id: str, user_id: str, encoded: str) -> bool:
         existing = db.execute('SELECT owner FROM pictures WHERE id=?', (capture_id,)).fetchone()
         if existing:
             return existing[0] == user_id  # never extend TTL on transport retry
-        # Evict only temporary pictures, oldest first, never finance rows/text.
+        # Evict only temporary pictures, soonest-expiring first, never finance rows/text.
         for owner, byte_limit, count_limit in ((user_id, USER_BYTES, USER_COUNT), (None, TOTAL_BYTES, TOTAL_COUNT)):
             where, args = (' WHERE owner=?', (owner,)) if owner is not None else ('', ())
             while True:
                 used, count = db.execute('SELECT COALESCE(SUM(length(data)),0),COUNT(*) FROM pictures'+where, args).fetchone()
                 if used+len(data) <= byte_limit and count < count_limit:
                     break
-                oldest = db.execute('SELECT id FROM pictures'+where+' ORDER BY created,id LIMIT 1', args).fetchone()
+                oldest = db.execute('SELECT id FROM pictures'+where+' ORDER BY expires,created,id LIMIT 1', args).fetchone()
                 if oldest is None:
                     return False
                 db.execute('DELETE FROM pictures WHERE id=?', oldest)
         now = time.time()
         db.execute('INSERT INTO pictures VALUES (?,?,?,?,?,?)',
-                   (capture_id, user_id, now, now+TTL_SECONDS, mime.removeprefix('data:'), data))
+                   (capture_id, user_id, now, now+ttl, mime.removeprefix('data:'), data))
     return True
 
 
@@ -99,6 +100,11 @@ def forget(capture_id: str, user_id: str):
         db.execute('DELETE FROM pictures WHERE id=? AND owner=?', (capture_id, user_id))
 
 
+def keeps_picture(row) -> bool:
+    """Pending captures keep theirs for review; auto-booked ones until their own 48h expiry."""
+    return row.status == 'pending' or row.status == 'confirmed' and bool((row.draft or {}).get('_auto_request'))
+
+
 def cleanup(db=None):
     """Hourly scheduler and every cache access enforce the same non-sliding TTL."""
     with _connection() as cache:
@@ -106,7 +112,7 @@ def cleanup(db=None):
             from .ocr_capture import OcrCapture
             for capture_id, owner in cache.execute('SELECT id,owner FROM pictures').fetchall():
                 row = db.get(OcrCapture, capture_id)
-                if row is None or row.user_id != owner or row.status != 'pending':
+                if row is None or row.user_id != owner or not keeps_picture(row):
                     cache.execute('DELETE FROM pictures WHERE id=?', (capture_id,))
 
 

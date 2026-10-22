@@ -50,3 +50,13 @@ it('rereads the same capture with revision protection instead of posting a new t
   expect(JSON.parse(fetch.mock.calls[0][1].body).expected_revision).toBe(item.revision)
   expect(fetch).toHaveBeenCalledTimes(1)
 })
+
+it('sends the free rules re-read to its own endpoint with the capture revision', async () => {
+  const { reparseCapture } = await import('./ocr-inbox')
+  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...item, revision: 'c'.repeat(64), message: '已用新规则识别' })))
+  vi.stubGlobal('fetch', fetch)
+  const result = await reparseCapture('synthetic-token', item)
+  expect(result.message).toContain('新规则')
+  expect(fetch.mock.calls[0][0]).toContain('/ai/ocr-inbox/unbooked/reparse')
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({ expected_revision: item.revision })
+})

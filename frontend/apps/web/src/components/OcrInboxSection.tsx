@@ -4,7 +4,7 @@ import { Button, Dialog, DialogContent, DialogHeader, DialogTitle } from '@beeco
 import type { TxForm } from '@beecount/web-features'
 import { useAuth } from '../context/AuthContext'
 import { useLedgers } from '../context/LedgersContext'
-import { captureEntryState, changeOcrCaptureState, fetchCaptureImage, fetchOcrInbox, OCR_INBOX_CHANGED, ocrInboxForm, rereadCaptureImage, type OcrInboxItem, type OcrInboxView } from '../lib/ocr-inbox'
+import { captureEntryState, changeOcrCaptureState, fetchCaptureImage, fetchOcrInbox, OCR_INBOX_CHANGED, ocrInboxForm, reparseCapture, rereadCaptureImage, type OcrCaptureState, type OcrInboxItem, type OcrInboxView } from '../lib/ocr-inbox'
 import { readWithin } from '../lib/manual-preflight'
 import { dispatchOpenEditTx, dispatchOpenNewTx } from '../lib/txDialogEvents'
 import { OcrInboxPanel, type OcrInboxSource } from './OcrInboxPanel'
@@ -17,6 +17,7 @@ export function OcrInboxSection() {
   const [total, setTotal] = useState(0)
   const [pendingTotal, setPendingTotal] = useState(0)
   const [ignoredTotal, setIgnoredTotal] = useState(0)
+  const [recentTotal, setRecentTotal] = useState(0)
   const [view, setView] = useState<OcrInboxView>('pending')
   const [notice, setNotice] = useState<{ text: string; item?: OcrInboxItem } | null>(null)
   const [source, setSource] = useState<OcrInboxSource | null>(null)
@@ -40,13 +41,13 @@ export function OcrInboxSection() {
       setItems(previous => more ? [...previous, ...page.items.filter(item => !previous.some(row => row.id === item.id))] : page.items)
       offset.current = (more ? offset.current : 0) + page.items.length
       setTotal(page.total)
-      setPendingTotal(page.pending_total); setIgnoredTotal(page.ignored_total)
+      setPendingTotal(page.pending_total); setIgnoredTotal(page.ignored_total); setRecentTotal(page.recent_total ?? 0)
     } catch { if (request === sequence.current) setError('待核对内容读取失败，不能确认是否还有未处理记录。') }
     finally { if (request === sequence.current) setLoading(false) }
   }, [token, activeLedgerId, view])
   useEffect(() => { setNotice(null); setView('pending'); setOpen(false) }, [token, activeLedgerId])
   useEffect(() => {
-    setItems([]); setTotal(0); setPendingTotal(0); setIgnoredTotal(0); offset.current = 0
+    setItems([]); setTotal(0); setPendingTotal(0); setIgnoredTotal(0); setRecentTotal(0); offset.current = 0
     busyRef.current = ''; setBusy('')
     releasePreview(); setSource(null); sourceSequence.current++
     void load()
@@ -77,7 +78,7 @@ export function OcrInboxSection() {
       }
     } catch { if (request === sourceSequence.current) setSource({ id: item.id, loading: false, error: '截图信息读取失败，请收起后重新打开。' }) }
   }
-  const changeState = async (item: OcrInboxItem, target: OcrInboxView) => {
+  const changeState = async (item: OcrInboxItem, target: OcrCaptureState) => {
     if (busyRef.current || item.ledger_id !== activeLedgerId) return
     const operation = ++operations.current
     busyRef.current = item.id; setBusy(item.id); setError(''); setNotice(null)
@@ -94,22 +95,27 @@ export function OcrInboxSection() {
       if (operation === operations.current) setError('操作结果尚未确认或状态已变化，请查看待核对及已忽略列表后再操作；账目不会因此新建或删除。')
     } finally { if (operation === operations.current) { busyRef.current = ''; setBusy('') } }
   }
-  const reread = async (item: OcrInboxItem) => {
+  // Both re-reads only update the draft; neither creates an entry.
+  const redraft = async (item: OcrInboxItem, run: typeof reparseCapture, failure: string) => {
     if (busyRef.current || item.ledger_id !== activeLedgerId) return
     const operation = ++operations.current
     busyRef.current = item.id; setBusy(item.id); setError(''); setNotice(null)
     releasePreview(); sourceSequence.current++; setSource(null)
     try {
-      const result = await rereadCaptureImage(token, item)
+      const result = await run(token, item)
       if (operation !== operations.current) return
       setNotice({ text: result.message })
       await load()
     } catch {
       if (operation !== operations.current) return
       await load()
-      if (operation === operations.current) setError('截图已清理、采集已变化或识别结果未确认，请刷新查看。此操作不会新增账目，请勿连续重试。')
+      if (operation === operations.current) setError(failure)
     } finally { if (operation === operations.current) { busyRef.current = ''; setBusy('') } }
   }
+  const reread = (item: OcrInboxItem) => redraft(item, rereadCaptureImage,
+    '截图已清理、采集已变化或识别结果未确认，请刷新查看。此操作不会新增账目，请勿连续重试。')
+  const reparse = (item: OcrInboxItem) => redraft(item, reparseCapture,
+    '采集已变化或识别结果未确认，请刷新查看。此操作不会新增账目。')
   const review = async (item: OcrInboxItem, type: TxForm['tx_type']) => {
     if (busyRef.current) return
     const operation = ++operations.current
@@ -145,7 +151,7 @@ export function OcrInboxSection() {
     <OcrInboxPanel items={items} total={total} loading={loading} error={error} busy={busy}
     view={view} pendingTotal={pendingTotal} ignoredTotal={ignoredTotal} onViewChange={setView}
     onChangeState={(item, target) => void changeState(item, target)}
-    onReread={item => void reread(item)}
+    onReread={item => void reread(item)} onReparse={item => void reparse(item)} recentTotal={recentTotal}
     source={source} onViewSource={item => void viewSource(item)}
     notice={notice ? { text: notice.text, undo: notice.item ? () => void changeState(notice.item!, 'pending') : undefined } : null}
     onRetry={() => void load()} onMore={() => void load(true)} onReview={(item, type) => void review(item, type)} />

@@ -12,7 +12,9 @@ export type OcrInboxItem = {
   draft: { type: 'income' | 'expense'; amount: number; happened_at: string;
     note: string; account_name: string; category_name: string; exclude_from_stats?: boolean; exclude_from_budget?: boolean } | null
 }
-export type OcrInboxView = 'pending' | 'ignored'
+/** 'recent' = auto-booked in the last 48h, while the screenshot is kept. */
+export type OcrInboxView = 'pending' | 'ignored' | 'recent'
+export type OcrCaptureState = 'pending' | 'ignored'
 /** What the list says about money: unbooked, a provisional entry outside stats, or a counted one. */
 export function captureEntryState(item: Pick<OcrInboxItem, 'entity_id' | 'entry'>) {
   if (!item.entity_id) return 'unbooked' as const
@@ -26,7 +28,7 @@ export function captureGaps(item: Pick<OcrInboxItem, 'draft'>): string[] {
   return [[!item.draft.happened_at, '付款时间'], [!item.draft.account_name, '账户']]
     .filter(([missing]) => missing).map(([, label]) => label as string)
 }
-export type OcrInboxPage = { total: number; pending_total: number; ignored_total: number; items: OcrInboxItem[] }
+export type OcrInboxPage = { total: number; pending_total: number; ignored_total: number; recent_total?: number; items: OcrInboxItem[] }
 export const OCR_INBOX_CHANGED = 'shizhang:ocr-inbox-changed'
 export async function fetchCaptureImage(token: string, id: string) {
   const controller = new AbortController()
@@ -47,14 +49,25 @@ export async function rereadCaptureImage(token: string, item: OcrInboxItem) {
     return result
   } finally { clearTimeout(timeout) }
 }
-export function fetchOcrInbox(token: string, ledgerId: string, offset = 0, state: OcrInboxView = 'pending'): Promise<OcrInboxPage> {
-  return authedGet(`/ai/ocr-inbox?ledger_id=${encodeURIComponent(ledgerId)}&offset=${offset}&limit=20&state=${state}`, token)
-}
-export async function changeOcrCaptureState(token: string, item: OcrInboxItem, status: OcrInboxView) {
+/** Free rules-only re-read of the stored OCR text; never calls a model or creates an entry. */
+export async function reparseCapture(token: string, item: OcrInboxItem) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 20_000)
   try {
-    const result = await authedPost<{ status: OcrInboxView; revision: string }>(`/ai/ocr-inbox/${encodeURIComponent(item.id)}/state`, token,
+    const result = await authedPost<OcrInboxItem & { message: string }>(`/ai/ocr-inbox/${encodeURIComponent(item.id)}/reparse`, token,
+      { expected_revision: item.revision, action_id: crypto.randomUUID() }, undefined, controller.signal)
+    if (result?.id !== item.id || result.ledger_id !== item.ledger_id || !/^[0-9a-f]{64}$/.test(result.revision)) throw new Error('REPARSE_UNCONFIRMED')
+    return result
+  } finally { clearTimeout(timeout) }
+}
+export function fetchOcrInbox(token: string, ledgerId: string, offset = 0, state: OcrInboxView = 'pending'): Promise<OcrInboxPage> {
+  return authedGet(`/ai/ocr-inbox?ledger_id=${encodeURIComponent(ledgerId)}&offset=${offset}&limit=20&state=${state}`, token)
+}
+export async function changeOcrCaptureState(token: string, item: OcrInboxItem, status: OcrCaptureState) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 20_000)
+  try {
+    const result = await authedPost<{ status: OcrCaptureState; revision: string }>(`/ai/ocr-inbox/${encodeURIComponent(item.id)}/state`, token,
       { status, expected_revision: item.revision, action_id: crypto.randomUUID() }, undefined, controller.signal)
     if (result?.status !== status || !/^[0-9a-f]{64}$/.test(result.revision)) throw new Error('CAPTURE_STATE_UNCONFIRMED')
     return result

@@ -111,3 +111,24 @@ it('tells the reviewer whether confirming updates the existing entry or records 
   expect(captureReviewNotice('none')).toContain('尚未入账')
   expect(captureReviewNotice('none')).toContain('只记这一笔')
 })
+
+it('offers the free rules re-read only for unbooked pending captures', () => {
+  const panel = (items: OcrInboxItem[], view: 'pending' | 'ignored' = 'pending') => renderToStaticMarkup(<LocaleProvider dictionaries={dictionaries}><OcrInboxPanel
+    items={items} total={items.length} loading={false} error="" view={view} onRetry={() => {}} onMore={() => {}} onReview={() => {}} onReparse={() => {}} /></LocaleProvider>)
+  expect(panel([{ ...item, entity_id: null, draft: null }])).toContain('用新规则重新识别')
+  expect(panel([{ ...item, entity_id: null, draft: null }])).toContain('免费、不调用模型')
+  expect(panel([item])).not.toContain('用新规则重新识别')                                   // already linked to an entry
+  expect(panel([{ ...item, entity_id: null, draft: null }], 'ignored')).not.toContain('用新规则重新识别')
+})
+
+it('shows auto-booked captures of the last 48 hours read-only with their screenshot expiry', () => {
+  const booked = { ...item, status: 'confirmed' as const, image: { available: true, expires_at: '2026-10-24T05:00:00Z' } }
+  const html = renderToStaticMarkup(<LocaleProvider dictionaries={dictionaries}><OcrInboxPanel
+    items={[booked]} total={1} recentTotal={1} view="recent" loading={false} error="" onRetry={() => {}} onMore={() => {}}
+    onReview={() => {}} onChangeState={() => {}} onViewSource={() => {}} onReparse={() => {}} onReread={() => {}} /></LocaleProvider>)
+  expect(html).toContain('最近自动记账（1）')
+  expect(html).toContain('已自动入账')
+  expect(html).toContain('到期自动删除')
+  expect(html).toContain('查看截图')
+  for (const action of ['核对这笔', '忽略这次采集', '用新规则重新识别', '用截图重新识别']) expect(html).not.toContain(action)
+})

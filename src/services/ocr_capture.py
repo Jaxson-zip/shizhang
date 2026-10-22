@@ -82,12 +82,13 @@ def retain_capture(db: Session, user_id: str, ledger_id: str, req, draft: dict |
             raise
         return row, False
     db.refresh(row)
-    # Only unresolved captures need a disposable picture. Successful automatic
-    # writes keep neither a permanent attachment nor an unnecessary image copy.
-    if req.image_base64 and req.vision_fallback and not (draft or {}).get('_auto_request'):
+    # Disposable picture, never a permanent attachment: unresolved captures keep it
+    # for review; automatic writes keep it 48h so the entry can be checked against it.
+    if req.image_base64 and req.vision_fallback:
         from . import ocr_images
         try:
-            ocr_images.retain(row.id, user_id, req.image_base64)
+            ocr_images.retain(row.id, user_id, req.image_base64,
+                              ocr_images.AUTO_TTL_SECONDS if (draft or {}).get('_auto_request') else ocr_images.TTL_SECONDS)
         except (ValueError, OSError, sqlite3.Error) as exc:
             logging.getLogger(__name__).warning('ocr.image_not_retained kind=%s', type(exc).__name__)
     return row, True

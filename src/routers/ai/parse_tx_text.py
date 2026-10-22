@@ -702,26 +702,34 @@ def _inbox_item(row: OcrCapture, external_ledger_id: str, entries: dict | None =
         'reason': row.reason, 'draft': draft or None, 'entity_id': row.entity_id,
         'status': row.status, 'revision': inbox_revision(row),
         'request_key': 'ocr-review-'+row.id, 'image': ocr_images.availability(row.id, row.user_id)
-        if row.status == 'pending' else {'available': False, 'expires_at': None}}
+        if ocr_images.keeps_picture(row) else {'available': False, 'expires_at': None}}
 
 
 @router.get('/ocr-inbox')
 def ocr_inbox(ledger_id: str, limit: int = Query(default=20, ge=1, le=100),
               offset: int = Query(default=0, ge=0, le=10000),
-              state: Literal['pending', 'ignored'] = Query(default='pending'),
+              state: Literal['pending', 'ignored', 'recent'] = Query(default='pending'),
               _scopes: set[str] = Depends(_PARSE_SCOPE_DEP), current_user: User = Depends(get_current_user),
               db: Session = Depends(get_db)):
     ledger, _ = require_accessible_ledger_by_external_id(db, user_id=current_user.id,
         ledger_external_id=ledger_id, roles={ROLE_OWNER, ROLE_EDITOR})
     owner = (OcrCapture.user_id == current_user.id, OcrCapture.ledger_id == ledger.id)
     counts = dict(db.execute(select(OcrCapture.status, func.count()).where(*owner).group_by(OcrCapture.status)).all())
-    filters = (*owner, OcrCapture.status == state)
-    total = db.scalar(select(func.count()).select_from(OcrCapture).where(*filters))
-    rows = db.scalars(select(OcrCapture).where(*filters).order_by(
-        OcrCapture.created_at.desc(), OcrCapture.id).offset(offset).limit(limit)).all()
+    # Auto-booked captures of the last 48h, while their screenshot is kept. Bounded set,
+    # so the private draft marker is checked in Python rather than with JSON SQL.
+    recent = [row for row in db.scalars(select(OcrCapture).where(*owner, OcrCapture.status == 'confirmed',
+              OcrCapture.created_at >= datetime.now(timezone.utc) - timedelta(hours=48)).order_by(
+              OcrCapture.created_at.desc(), OcrCapture.id)).all() if (row.draft or {}).get('_auto_request')]
+    if state == 'recent':
+        total, rows = len(recent), recent[offset:offset + limit]
+    else:
+        filters = (*owner, OcrCapture.status == state)
+        total = db.scalar(select(func.count()).select_from(OcrCapture).where(*filters))
+        rows = db.scalars(select(OcrCapture).where(*filters).order_by(
+            OcrCapture.created_at.desc(), OcrCapture.id).offset(offset).limit(limit)).all()
     entries = _linked_entries(db, rows)
     return {'total': total, 'pending_total': counts.get('pending', 0), 'ignored_total': counts.get('ignored', 0),
-            'items': [_inbox_item(row, ledger_id, entries) for row in rows]}
+            'recent_total': len(recent), 'items': [_inbox_item(row, ledger_id, entries) for row in rows]}
 
 
 def _owned_capture(db: Session, user: User, capture_id: str):
@@ -753,7 +761,7 @@ def ocr_capture_image(capture_id: str, _scopes: set[str] = Depends(_PARSE_SCOPE_
 
     from ...services import ocr_images
     row, _ = _owned_capture(db, current_user, capture_id)
-    picture = ocr_images.read(row.id, current_user.id) if row.status == 'pending' else None
+    picture = ocr_images.read(row.id, current_user.id) if ocr_images.keeps_picture(row) else None
     if picture is None:
         raise HTTPException(status_code=410, detail='临时截图未上传或已清理，文字与账目仍保留')
     return Response(picture['data'], media_type=picture['mime'], headers={
@@ -839,6 +847,55 @@ async def reread_capture(capture_id: str, req: RereadCaptureRequest,
         OcrCapture.entity_id.is_(None), OcrCapture.receipt.is_(None),
         raw.is_(None) if original_raw is None else raw == original_raw).values(draft=draft,
             reason='已补读截图，尚未入账；请核对金额、方向、时间及账户后保存' if recovered else row.reason),
+        execution_options={'synchronize_session': False})
+    if changed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='识别期间采集已变化，请刷新查看；未新增账目')
+    db.commit()
+    db.refresh(row)
+    return {**_inbox_item(row, ledger.external_id), 'message': message}
+
+
+@router.post('/ocr-inbox/{capture_id}/reparse')
+async def reparse_capture(capture_id: str, req: RereadCaptureRequest,
+                          _scopes: set[str] = Depends(_WRITE_SCOPE_DEP),
+                          current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Free re-read of the stored OCR text with the current rules; no model, no new entry."""
+    row, ledger = _owned_capture(db, current_user, capture_id)
+    action = {'id': str(req.action_id), 'before': req.expected_revision}
+    last = (row.draft or {}).get('_rules_retry', {})
+    if last.get('action') == action:
+        return {**_inbox_item(row, ledger.external_id), 'message': last['message']}
+    if row.status != 'pending' or row.entity_id or row.receipt:
+        raise HTTPException(status_code=409, detail='只可重新识别尚未入账的待核对采集，已入账请核对原记录')
+    if inbox_revision(row) != req.expected_revision:
+        raise HTTPException(status_code=409, detail='采集已变化，请刷新后再识别')
+    original_draft = row.draft
+    original_raw = db.scalar(select(cast(OcrCapture.draft, Text)).where(OcrCapture.id == row.id))
+    recovered = None
+    message = '新规则仍无法识别这次采集，尚未新增账目；可用截图重新识别或手动补全'
+    try:
+        parsed = await parse_tx_text(ParseTxTextRequest(text=row.text, ledger_id=ledger.external_id, engine='rules'),
+                                     _scopes=_scopes, current_user=current_user, db=db)
+        recovered = parsed['tx_drafts'][0]
+        known = {k: v for k, v in (original_draft or {}).items() if not k.startswith('_')}
+        if known and any(known.get(key) and known[key] != recovered.get(key)
+                         for key in ('type', 'amount', 'happened_at', 'account_name')):
+            raise ValueError('conflicting existing draft')
+        message = '已用新规则识别，尚未入账；请核对后保存'
+    except (ValueError, HTTPException) as exc:
+        if isinstance(exc, HTTPException) and exc.status_code != 422:
+            raise
+        recovered = None
+        logger.info('ocr.rules_reparse_unresolved kind=%s', type(exc).__name__)
+    draft = {**(original_draft or {}), **(recovered or {}), '_rules_retry': {
+        'action': action, 'message': message, 'status': 'recovered' if recovered else 'unresolved'}}
+    raw = cast(OcrCapture.draft, Text)
+    changed = db.execute(update(OcrCapture).where(OcrCapture.id == row.id,
+        OcrCapture.user_id == current_user.id, OcrCapture.status == 'pending',
+        OcrCapture.entity_id.is_(None), OcrCapture.receipt.is_(None),
+        raw.is_(None) if original_raw is None else raw == original_raw).values(draft=draft,
+            reason='已用新规则识别，尚未入账；请核对金额、方向、时间及账户后保存' if recovered else row.reason),
         execution_options={'synchronize_session': False})
     if changed.rowcount != 1:
         db.rollback()
