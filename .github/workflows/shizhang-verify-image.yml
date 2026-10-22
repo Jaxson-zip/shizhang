@@ -19,7 +19,8 @@ jobs:
         run: docker build --build-arg VERSION="$SOURCE_VERSION" --tag shizhang-cloud:verify .
       - name: Verify backend without production data or outbound network
         run: |
-          docker run --rm --network none --cpus 1 --memory 512m \
+          set +e
+          docker run --name shizhang-backend-check --network none --cpus 1 --memory 512m \
             --tmpfs /data:rw,size=128m --tmpfs /tmp:rw,size=256m \
             -e APP_ENV=test -e PYTHONDONTWRITEBYTECODE=1 \
             -e DATABASE_URL=sqlite:///:memory: \
@@ -31,7 +32,11 @@ jobs:
             -v "$PWD/frontend:/app/frontend:ro" \
             -v "$PWD/docs:/app/docs:ro" \
             -v "$PWD/pytest.ini:/app/pytest.ini:ro" \
-            shizhang-cloud:verify python -m pytest -q -p no:cacheprovider tests
+            shizhang-cloud:verify python -m pytest -x -vv --tb=short -p no:cacheprovider tests
+          result=$?
+          docker inspect shizhang-backend-check --format '{"oom_killed":{{.State.OOMKilled}},"exit_code":{{.State.ExitCode}}}'
+          docker rm shizhang-backend-check
+          exit "$result"
       - name: Verify startup and migrations on a disposable database
         run: |
           docker run -d --name shizhang-isolated-smoke \
@@ -71,6 +76,8 @@ jobs:
       - name: Remove disposable smoke container if needed
         if: always()
         run: |
-          if docker container inspect shizhang-isolated-smoke > /dev/null 2>&1; then
-            docker rm -f shizhang-isolated-smoke
-          fi
+          for name in shizhang-backend-check shizhang-isolated-smoke; do
+            if docker container inspect "$name" > /dev/null 2>&1; then
+              docker rm -f "$name"
+            fi
+          done
