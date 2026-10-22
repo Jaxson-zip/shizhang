@@ -19,26 +19,46 @@ jobs:
         run: docker build --build-arg VERSION="$SOURCE_VERSION" --tag shizhang-cloud:verify .
       - name: Verify backend without production data or outbound network
         run: |
-          set +e
-          docker run --name shizhang-backend-check --network none --cpus 1 --memory 512m \
-            --tmpfs /data:rw,size=128m --tmpfs /tmp:rw,size=256m \
-            -e APP_ENV=test -e PYTHONDONTWRITEBYTECODE=1 \
-            -e DATABASE_URL=sqlite:////tmp/shizhang-suite.db \
-            -e JWT_SECRET=synthetic-ci-only-secret-at-least-32-bytes \
-            -e BACKUP_SCHEDULER_ENABLED=false \
-            -e ALLOW_APP_RW_SCOPES=false \
-            -e REGISTRATION_ENABLED=true \
-            -e RAG_INDEX_REFRESH_INTERVAL_SECONDS=0 \
-            -v "$PWD/tests:/app/tests:ro" \
-            -v "$PWD/shortcuts:/app/shortcuts:ro" \
-            -v "$PWD/frontend:/app/frontend:ro" \
-            -v "$PWD/docs:/app/docs:ro" \
-            -v "$PWD/pytest.ini:/app/pytest.ini:ro" \
-            shizhang-cloud:verify python -c 'import src.models,src.services.ocr_capture; from src.database import Base,engine; Base.metadata.create_all(engine); import pytest; raise SystemExit(pytest.main(["-x","-vv","--tb=short","-p","no:cacheprovider","tests"]))'
-          result=$?
-          docker inspect shizhang-backend-check --format '{"oom_killed":{{.State.OOMKilled}},"exit_code":{{.State.ExitCode}}}'
-          docker rm shizhang-backend-check
-          exit "$result"
+          mkdir -p artifacts/test-results
+          mapfile -t files < <(find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) | sort)
+          test "${#files[@]}" -gt 0
+          # Fresh containers release suite-wide fixture memory; no tests are excluded.
+          for ((start=0; start<${#files[@]}; start+=8)); do
+            printf 'Test batch starting at file %s of %s\n' "$start" "${#files[@]}"
+            set +e
+            docker run --name shizhang-backend-check --network none --cpus 1 --memory 512m \
+              --tmpfs /data:rw,size=128m --tmpfs /tmp:rw,size=256m \
+              -e APP_ENV=test -e PYTHONDONTWRITEBYTECODE=1 \
+              -e DATABASE_URL=sqlite:////tmp/shizhang-suite.db \
+              -e JWT_SECRET=synthetic-ci-only-secret-at-least-32-bytes \
+              -e BACKUP_SCHEDULER_ENABLED=false \
+              -e ALLOW_APP_RW_SCOPES=false -e REGISTRATION_ENABLED=true \
+              -e RAG_INDEX_REFRESH_INTERVAL_SECONDS=0 \
+              -v "$PWD/tests:/app/tests:ro" \
+              -v "$PWD/shortcuts:/app/shortcuts:ro" \
+              -v "$PWD/frontend:/app/frontend:ro" \
+              -v "$PWD/docs:/app/docs:ro" \
+              -v "$PWD/pytest.ini:/app/pytest.ini:ro" \
+              -v "$PWD/artifacts/test-results:/reports" \
+              shizhang-cloud:verify python -c 'import sys; import src.models,src.services.ocr_capture; from src.database import Base,engine; Base.metadata.create_all(engine); import pytest; raise SystemExit(pytest.main(["-x","-q","-o","addopts=","--tb=short","-p","no:cacheprovider","--junitxml="+sys.argv[1]]+sys.argv[2:]))' \
+              "/reports/batch-$start.xml" "${files[@]:start:8}"
+            result=$?
+            docker inspect shizhang-backend-check --format '{"oom_killed":{{.State.OOMKilled}},"exit_code":{{.State.ExitCode}}}'
+            docker rm shizhang-backend-check
+            set -e
+            test "$result" -eq 0
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from xml.etree import ElementTree as ET
+          suites = [suite for path in Path('artifacts/test-results').glob('batch-*.xml') for suite in ET.parse(path).getroot().iter('testsuite')]
+          counts = {key: sum(int(s.get(key, 0)) for s in suites) for key in ('tests', 'failures', 'errors', 'skipped')}
+          assert counts['tests'] > 0 and counts['failures'] == counts['errors'] == 0
+          counts['passed'] = counts['tests'] - counts['skipped']
+          Path('artifacts/test-summary.json').write_text(json.dumps(counts, indent=2))
+          print(json.dumps(counts))
+          PY
       - name: Verify startup and migrations on a disposable database
         run: |
           docker run -d --name shizhang-isolated-smoke \
