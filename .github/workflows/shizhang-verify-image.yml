@@ -27,6 +27,7 @@ jobs:
             -e JWT_SECRET=synthetic-ci-only-secret-at-least-32-bytes \
             -e BACKUP_SCHEDULER_ENABLED=false \
             -e ALLOW_APP_RW_SCOPES=false \
+            -e REGISTRATION_ENABLED=true \
             -e RAG_INDEX_REFRESH_INTERVAL_SECONDS=0 \
             -v "$PWD/tests:/app/tests:ro" \
             -v "$PWD/shortcuts:/app/shortcuts:ro" \
