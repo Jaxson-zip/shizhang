@@ -212,12 +212,14 @@ def _try_parse_json(raw: str) -> dict | list | None:
     抽取本身允许 dict / list / 用 ```json``` 代码块包裹 — 这是「LLM 输出文本
     格式」的鲁棒,跟 schema 验证是两件事。schema 严格性由 caller 的
     `_normalize_drafts` 强制(必须 `{"tx_drafts": [...]}`),不在 parser 兼容。
+    strict=False:模型常在字符串里直接输出换行/制表符(非法 JSON 控制字符),
+    内容本身无歧义,接受它;结构不完整的输出仍返回 None。
     """
     if not raw:
         return None
     # 1. 直接 try
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(raw, strict=False)
         if isinstance(parsed, (dict, list)):
             return parsed
     except (ValueError, TypeError):
@@ -226,7 +228,7 @@ def _try_parse_json(raw: str) -> dict | list | None:
     m = _JSON_BLOCK_RE.search(raw)
     if m:
         try:
-            parsed = json.loads(m.group(1).strip())
+            parsed = json.loads(m.group(1).strip(), strict=False)
             if isinstance(parsed, (dict, list)):
                 return parsed
         except (ValueError, TypeError):
@@ -235,7 +237,7 @@ def _try_parse_json(raw: str) -> dict | list | None:
     m = _FIRST_OBJECT_RE.search(raw)
     if m:
         try:
-            return json.loads(m.group(0))
+            return json.loads(m.group(0), strict=False)
         except (ValueError, TypeError):
             pass
     return None
@@ -411,6 +413,13 @@ async def call_chat_json(
             logger.warning(
                 "ai.call_chat_json json parse failed attempt=%d raw=%s",
                 attempt + 1, '[redacted]' if redact_content else (content or "")[:300],
+            )
+            # Shape only, never content: enough to tell truncation from prose from bad escapes.
+            text = content or ""
+            logger.warning(
+                "ai.call_chat_json parse shape finish=%s len=%d starts_brace=%s ends_brace=%s raw_newline=%s fenced=%s",
+                (data.get("choices") or [{}])[0].get("finish_reason"), len(text),
+                text.lstrip().startswith("{"), text.rstrip().endswith("}"), "\n" in text, "```" in text,
             )
         except httpx.TimeoutException as exc:
             elapsed = time.monotonic() - t0
