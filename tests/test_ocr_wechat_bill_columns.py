@@ -61,6 +61,30 @@ def test_two_datetimes_in_a_wrapped_column_bill_leave_the_time_unset():
     assert parse(text)['tx_drafts'][0]['happened_at'] == ''
 
 
+def test_second_datetime_glued_to_a_value_still_makes_payment_time_ambiguous():
+    text = C5.replace(T, T+'商品有效期2026年10月23日21:00:00')
+    assert parse(text)['tx_drafts'][0]['happened_at'] == ''
+
+
+def test_only_a_datetime_embedded_in_product_text_is_not_a_payment_time():
+    text = C5.replace(T, '日期无法识别').replace('合成第二行文字十一个字', '商品有效期2026年10月23日21:00:00')
+    assert parse(text)['tx_drafts'][0]['happened_at'] == ''
+
+
+@pytest.mark.parametrize('other_time', ['创建时间', '完成时间'])
+@pytest.mark.parametrize('location', ['labels', 'values'])
+def test_other_time_cannot_replace_an_unreadable_payment_time(other_time, location):
+    text = C5.replace(T, '日期无法识别')
+    if location == 'labels':
+        text = text.replace('商户单号\n支付成功', '商户单号\n'+other_time+'\n支付成功')
+        value = '2026年10月21日 18:00:00'
+    else:
+        value = other_time+'\n2026年10月21日 18:00:00'
+    text = text.replace('合成第二行文字十一个字', value)
+    with pytest.raises(PaymentTextError):
+        parse(text)
+
+
 def test_more_than_two_title_lines_are_not_joined_into_a_merchant():
     with pytest.raises(PaymentTextError):
         parse(C1.replace('合成小吃店铺名称', '甲方\n乙方\n合成小吃店铺名称'))
@@ -82,6 +106,35 @@ def test_channel_mode_books_a_wrapped_wechat_bill_once(sample):
         assert client.post('/api/v1/ai/record-ocr-text', headers=headers, json=body).json()['entity_id'] == first.json()['entity_id']
         rows = client.get('/api/v1/read/ledgers/' + ledger + '/transactions', headers=headers).json()
         assert len(rows) == 1 and rows[0]['tx_type'] == 'expense' and rows[0]['exclude_from_stats'] is False
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize('sample', ['other_time', 'two_times'])
+def test_channel_mode_keeps_ambiguous_payment_times_unbooked_on_retry(sample):
+    client = _make_client()
+    try:
+        headers, ledger, account, expense, _ = setup_trigger(client, f'time-guard-{sample}@example.invalid')
+        config = {'ocr_rules': {'ledgers': {ledger: {'accounting_mode': 'channel', 'wechat_account_id': account,
+                                                       'default_expense_category_id': expense}}}}
+        assert client.patch('/api/v1/profile/me', headers=headers, json={'ai_config': config}).status_code == 200
+        if sample == 'other_time':
+            text = (C5.replace('商户单号\n支付成功', '商户单号\n创建时间\n支付成功')
+                    .replace(T, '日期无法识别')
+                    .replace('合成第二行文字十一个字', '2026年10月21日 18:00:00'))
+        else:
+            text = C5.replace(T, T+'商品有效期2026年10月23日21:00:00')
+        body = {'ledger_id': ledger, 'text': text, 'request_id': str(uuid4()), 'review_policy': 'deferred'}
+        first = client.post('/api/v1/ai/record-ocr-text', headers=headers, json=body)
+        assert first.status_code == 202, first.text
+        assert first.json()['capture_status'] == 'pending' and not first.json()['recorded']
+        retry = client.post('/api/v1/ai/record-ocr-text', headers=headers, json=body)
+        assert retry.status_code == 202 and retry.json()['capture_id'] == first.json()['capture_id']
+        rows = client.get('/api/v1/read/ledgers/' + ledger + '/transactions', headers=headers).json()
+        assert rows == []
+        inbox = client.get('/api/v1/ai/ocr-inbox', headers=headers, params={'ledger_id': ledger}).json()
+        assert inbox['pending_total'] == 1
     finally:
         client.close()
         app.dependency_overrides.clear()

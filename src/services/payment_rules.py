@@ -257,7 +257,7 @@ _PERSONAL_DATE = r"\d{4}(?:年|-|/)\d{1,2}(?:月|-|/)\d{1,2}日?[ T]+\d{1,2}:\d{
 
 _BILL_LABELS = {'当前状态', '支付时间', '付款时间', '交易时间', '商品', '商户全称', '收单机构', '支付方式',
                 '付款方式', '交易单号', '商户单号', '经营单号', '收款方备注', '收款详情'}
-_BILL_DATETIME = re.compile(r"^(\d{4}(?:年\d{1,2}月\d{1,2}日[ T]*|[-/]\d{1,2}[-/]\d{1,2}[ T]+)\d{1,2}:\d{2}(?::\d{2})?)")
+_BILL_DATETIME = re.compile(r"(\d{4}(?:年\d{1,2}月\d{1,2}日[ T]*|[-/]\d{1,2}[-/]\d{1,2}[ T]+)\d{1,2}:\d{2}(?::\d{2})?)")
 
 
 def _wechat_bill_column(lines: list[str]) -> tuple[str, str] | None:
@@ -275,13 +275,20 @@ def _wechat_bill_column(lines: list[str]) -> tuple[str, str] | None:
         end += 1
     block = lines[start:end]
     times = [label for label in block if label.endswith('时间')]
-    if len(block) < 4 or len(times) != 1:
+    if (len(block) < 4 or len(times) != 1 or end == len(lines)
+            or lines[end] not in {'支付成功', '付款成功', '交易成功'}):
+        return None
+    # A readable creation/completion time elsewhere cannot stand in for a missing
+    # payment value. Include unfamiliar time labels outside the restored block.
+    page_times = [line for line in lines if re.match(r'^[\u4e00-\u9fff]{1,12}时间(?:[:\s\d]|$)', line)]
+    if page_times != times:
         return None
     states = [line for line in lines if line in {'支付成功', '付款成功', '交易成功'}]
-    stamps = [m[1] for line in lines if (m := _BILL_DATETIME.match(line))]
+    stamps = [m[1] for line in lines for m in _BILL_DATETIME.finditer(line)]
+    standalone_stamp = any(_BILL_DATETIME.match(line) for line in lines)
     if len(states) != 1 or lines.index(states[0]) < end:
         return None
-    return states[0], stamps[0] if len(stamps) == 1 else ""  # none or ambiguous: left for review
+    return states[0], stamps[0] if len(stamps) == 1 and standalone_stamp else ""  # otherwise review
 
 
 def _personal_stamp(raw: str) -> str:
