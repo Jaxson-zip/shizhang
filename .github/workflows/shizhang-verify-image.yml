@@ -1,0 +1,76 @@
+name: Shizhang verify image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-image:
+    if: github.repository == 'Jaxson-zip/shizhang'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build this source
+        env:
+          SOURCE_VERSION: ${{ github.sha }}
+        run: docker build --build-arg VERSION="$SOURCE_VERSION" --tag shizhang-cloud:verify .
+      - name: Verify backend without production data or outbound network
+        run: |
+          docker run --rm --network none --cpus 1 --memory 512m \
+            --tmpfs /data:rw,size=128m --tmpfs /tmp:rw,size=256m \
+            -e APP_ENV=test -e PYTHONDONTWRITEBYTECODE=1 \
+            -e DATABASE_URL=sqlite:///:memory: \
+            -e JWT_SECRET=synthetic-ci-only-secret-at-least-32-bytes \
+            -e BACKUP_SCHEDULER_ENABLED=false \
+            -e RAG_INDEX_REFRESH_INTERVAL_SECONDS=0 \
+            -v "$PWD/tests:/app/tests:ro" \
+            -v "$PWD/shortcuts:/app/shortcuts:ro" \
+            -v "$PWD/frontend:/app/frontend:ro" \
+            -v "$PWD/docs:/app/docs:ro" \
+            -v "$PWD/pytest.ini:/app/pytest.ini:ro" \
+            shizhang-cloud:verify python -m pytest -q -p no:cacheprovider tests
+      - name: Verify startup and migrations on a disposable database
+        run: |
+          docker run -d --name shizhang-isolated-smoke \
+            --network none --cpus 1 --memory 512m \
+            --tmpfs /data:rw,size=128m --tmpfs /tmp:rw,size=128m \
+            -e JWT_SECRET=synthetic-ci-only-secret-at-least-32-bytes \
+            -e BACKUP_SCHEDULER_ENABLED=false \
+            -e RAG_INDEX_REFRESH_INTERVAL_SECONDS=0 \
+            shizhang-cloud:verify
+          # No ports are published. Health is checked inside this disposable container.
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec shizhang-isolated-smoke curl --fail --silent http://127.0.0.1:8080/healthz > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = true
+          docker exec shizhang-isolated-smoke alembic current
+          docker rm -f shizhang-isolated-smoke
+      - name: Export verified image and checksums
+        env:
+          SOURCE_VERSION: ${{ github.sha }}
+        run: |
+          mkdir -p artifacts
+          docker image inspect shizhang-cloud:verify --format '{{.Id}}' > artifacts/image-id.txt
+          printf '%s\n' "$SOURCE_VERSION" > artifacts/source-commit.txt
+          docker save shizhang-cloud:verify | gzip > artifacts/shizhang-image.tar.gz
+          cd artifacts
+          sha256sum shizhang-image.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shizhang-verified-image-${{ github.sha }}
+          path: artifacts/
+          retention-days: 7
+      - name: Remove disposable smoke container if needed
+        if: always()
+        run: |
+          if docker container inspect shizhang-isolated-smoke > /dev/null 2>&1; then
+            docker rm -f shizhang-isolated-smoke
+          fi
