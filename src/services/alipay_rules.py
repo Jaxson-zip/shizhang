@@ -99,6 +99,15 @@ def _visible_category(lines, end):
     return values[0]
 
 
+def _method_after_benefits(lines):
+    """The 交易方式 value listed after 支付宝积分+N / 体验金+N lines and the payee-row amount."""
+    for line in lines[:6]:
+        if re.fullmatch(r'[一-鿿A-Za-z]{1,10}[+＋]\d+(?:\.\d+)?', line) or re.fullmatch(r'[¥￥·*]\s*' + _MONEY, line):
+            continue
+        return line if re.match(r'^(?:余额宝|花呗|账户余额|余额|.{1,12}(?:银行|信用卡|储蓄卡))', line) else ''
+    return ''
+
+
 def parse_alipay_text(text, *, accounts, funding_aliases, default_category, channel_account, error_type,
                       saving_as_excluded_expense=False):
     lines = _lines(text)
@@ -174,7 +183,9 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
                 raise error_type('支付宝实付与订单金额、优惠存在冲突，请核对')
     else:
         statuses = [i for i, line in enumerate(body) if line == '支付成功']
-        amounts = [(i, re.fullmatch(r'[¥￥]\s*(' + _MONEY + ')', line)) for i, line in enumerate(body)]
+        # The success page never shows a sign (it is always a payment), so Apple OCR reading
+        # the ¥ as '·' or '*' (2026-10-22) cannot change direction; amounts must still agree.
+        amounts = [(i, re.fullmatch(r'[¥￥·*]\s*(' + _MONEY + ')', line)) for i, line in enumerate(body)]
         amounts = [(i, match) for i, match in amounts if match]
         if len(statuses) != 1 or not amounts or not statuses[0] < amounts[0][0]:
             raise error_type('支付宝付款成功页金额不明确')
@@ -183,11 +194,14 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
             raise error_type('支付宝成功页出现多笔不同金额，请核对')
         pos = amounts[0][0]
         end_name = next((i for i, line in enumerate(body) if re.match(r'^交易方式(?:\s|:|$)', line)), len(body))
-        names = [line for line in body[pos+1:end_name] if not re.fullmatch(r'[¥￥]\s*' + _MONEY, line)]
-        if len(names) != 1 or not 1 <= len(names[0]) <= 120 or not field('交易方式'):
+        names = [line for line in body[pos+1:end_name] if not re.fullmatch(r'[¥￥·*]\s*' + _MONEY, line)]
+        # OCR may list the 交易方式 label before the points/benefit lines and its value after them.
+        method = (_method_after_benefits(lines[end:]) if body and re.fullmatch(r'交易方式[ \t:]*', body[-1])
+                  else field('交易方式'))
+        if len(names) != 1 or not 1 <= len(names[0]) <= 120 or not method:
             raise error_type('支付宝成功页收款对象或交易方式不明确')
         note, kind, stamp_raw = names[0], 'expense', ''
-        same_row = re.fullmatch(r'(.{1,120}?)[ \t]+[¥￥]\s*(' + _MONEY + ')', note)
+        same_row = re.fullmatch(r'(.{1,120}?)[ \t]+[¥￥·*]\s*(' + _MONEY + ')', note)
         if same_row:
             if Decimal(same_row[2].replace(',', '')) != amount:
                 raise error_type('支付宝成功页收款行金额与实付不一致')
@@ -204,7 +218,7 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
             stamp = value.replace(tzinfo=timezone(timedelta(hours=8))).isoformat()
         except ValueError:
             raise error_type('支付宝账目日期无法读取，需要从截图补读；未采用当前时间') from None
-    funding = re.sub(r'\s*[>〉›]$', '', field('付款方式') if detail else field('交易方式'))
+    funding = re.sub(r'\s*[>〉›]$', '', field('付款方式') if detail else method)
     wallet = (funding_aliases or {}).get(funding, funding)
     matches = [name for name, currency in accounts if name == wallet and (currency or 'CNY') == 'CNY']
     order = field('订单号') if detail else ''
