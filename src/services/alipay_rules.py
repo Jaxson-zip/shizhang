@@ -99,12 +99,43 @@ def _visible_category(lines, end):
     return values[0]
 
 
+_DATETIME = re.compile(r'\d{4}(?:-\d{1,2}-\d{1,2}|年\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}:\d{2}')
+_METHOD = re.compile(r'^(?:余额宝|花呗|账户余额|余额|.{1,12}(?:银行|信用卡|储蓄卡))')
+
+
+def _restore_detail_columns(body):
+    """Bill detail whose field labels OCR listed as one block above the amount, values below.
+
+    Only the time (the single date-time below the status, when the block has exactly one time
+    label) and an adjacent payment method are attached; other values are never paired by
+    position. The label block is removed so a label is never read as the payee.
+    """
+    status = next((i for i, line in enumerate(body)
+                   if re.fullmatch(r'(?:当前状态\s*:\s*)?(?:交易成功|支付成功|自动扣款成功|等待确认收货)', line)), None)
+    if status is None:
+        return body
+    labels = [i for i, line in enumerate(body[:status]) if line in _FIELDS]
+    if len(labels) < 2 or labels != list(range(labels[0], labels[0] + len(labels))):
+        return body
+    run = [body[i] for i in labels]
+    rest = body[:labels[0]] + body[labels[-1] + 1:]
+    status -= len(labels)
+    times = [label for label in run if label in ('支付时间', '付款时间', '创建时间')]
+    dates = [i for i, line in enumerate(rest) if i > status and _DATETIME.fullmatch(line)]
+    if len(times) == 1 and len(dates) == 1:
+        k = dates[0]
+        rest[k] = times[0] + ' ' + rest[k]
+        if '付款方式' in run and k + 1 < len(rest) and _METHOD.match(rest[k + 1]):
+            rest[k + 1] = '付款方式 ' + rest[k + 1]
+    return rest
+
+
 def _method_after_benefits(lines):
     """The 交易方式 value listed after 支付宝积分+N / 体验金+N lines and the payee-row amount."""
     for line in lines[:6]:
         if re.fullmatch(r'[一-鿿A-Za-z]{1,10}[+＋]\d+(?:\.\d+)?', line) or re.fullmatch(r'[¥￥·*]\s*' + _MONEY, line):
             continue
-        return line if re.match(r'^(?:余额宝|花呗|账户余额|余额|.{1,12}(?:银行|信用卡|储蓄卡))', line) else ''
+        return line if _METHOD.match(line) else ''
     return ''
 
 
@@ -130,6 +161,8 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
     compact = ''.join(body)
     if re.search(r'支付失败|交易失败|退款成功|退款中|退款金额|退款时间|已退款|已退回|待付款|等待付款|未支付|交易关闭|提现|信用卡还款|充值|USD|EUR|HKD|JPY|美元|欧元|港币|日元|\$|€', compact, re.I):
         raise error_type('支付宝付款状态、资金用途或币种需核对；不会作为成功消费入账')
+    if detail:
+        body = _restore_detail_columns(body)
 
     def field(label):
         matches = []
@@ -155,10 +188,14 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
         if not header:
             raise error_type('支付宝单笔金额、正负号或完成状态不明确')
         pos, status_pos, state, kind, amount = header
-        names = [line for line in body[:pos] if line not in {'账单详情', '全部账单', '账单详情全部账单', '闲鱼', '收'}]
-        if len(names) != 1 or not 1 <= len(names[0]) <= 120:
+        # The payee is the title after 全部账单 (status-bar lines sit above it); OCR may wrap a
+        # long title onto two lines. Field labels are never a payee.
+        start = next((i + 1 for i, line in enumerate(body[:pos]) if line in {'全部账单', '账单详情全部账单'}), 0)
+        names = [line for line in body[start:pos]
+                 if line not in {'账单详情', '全部账单', '账单详情全部账单', '闲鱼', '收'} and line not in _FIELDS]
+        if not 1 <= len(names) <= 2 or not all(1 <= len(name) <= 120 for name in names):
             raise error_type('支付宝收付款对象不明确，请从截图补读')
-        note = re.sub(r'\s*[>〉›]$', '', names[0])
+        note = re.sub(r'\s*[>〉›]$', '', ' '.join(names))
         if status_pos != pos + 1:
             raise error_type('支付宝金额与状态对应关系不明确')
         stamp_raw = field('支付时间') or field('付款时间')
