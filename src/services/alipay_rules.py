@@ -159,8 +159,13 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
     end = next(i for i, line in enumerate(lines) if line.startswith('账单管理')) if detail else next(i for i, line in enumerate(lines) if '支付宝积分' in line)
     body = lines[:end]
     compact = ''.join(body)
-    if re.search(r'支付失败|交易失败|退款成功|退款中|退款金额|退款时间|已退款|已退回|待付款|等待付款|未支付|交易关闭|提现|信用卡还款|充值|USD|EUR|HKD|JPY|美元|欧元|港币|日元|\$|€', compact, re.I):
+    if re.search(r'支付失败|交易失败|退款成功|退款中|退款金额|退款时间|已退款|已退回|待付款|等待付款|未支付|交易关闭|提现|信用卡还款|USD|EUR|HKD|JPY|美元|欧元|港币|日元|\$|€', compact, re.I):
         raise error_type('支付宝付款状态、资金用途或币种需核对；不会作为成功消费入账')
+    from .payment_rules import (
+        WALLET_TOPUP,  # a recharge is spending unless it fills the user's own balance
+    )
+    if '充值' in compact and WALLET_TOPUP.search(compact):
+        raise error_type('识别到充值到你自己的余额，属于资金划转，不计支出；如需记录请用原生表单')
     if detail:
         body = _restore_detail_columns(body)
 

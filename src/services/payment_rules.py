@@ -61,6 +61,9 @@ def load_ocr_preferences(raw: str | None, ledger_id: str) -> dict:
         return {}
 
 
+WALLET_TOPUP = re.compile(r"零钱充值|充值到零钱|零钱通|余额充值|充值到余额|账户余额充值|余额宝转入|转入余额宝")
+
+
 def payment_channel(text: str) -> str | None:
     """Only explicit channel evidence; a bare balance/card label is insufficient."""
     compact = re.sub(r'\s+', '', unicodedata.normalize('NFKC', text))
@@ -520,8 +523,12 @@ def parse_payment_text(text: str, *, accounts: list[tuple[str, str | None]],
     campus_program = re.search(r'(?m)^商家小程序\n[^\n]*(?:一卡通|校园卡)[^\n]*$', text)
     campus_topup = "充值" in compact and (bool(re.search(r"(?:一卡通|校园卡)充值", compact))
         or bool(campus_program and len(products) == 1 and re.search(r'(?:一卡通|卡通|校园卡)充值$', products[0])))
-    if "充值" in compact and not (campus_topup and campus_topup_as_expense):
-        raise PaymentTextError("识别到充值；一卡通充值如需计支出，请明确启用充值按支出选项，其他充值请用原生表单核对")
+    # User decision 2026-10-22: a recharge paid to a merchant (campus card, phone, game,
+    # membership, store card) is spending, because later use of that balance is never
+    # captured. Moving money into the user's own wallet is a transfer, not spending.
+    # campus_topup_as_expense is kept for compatibility and no longer gates booking.
+    if "充值" in compact and WALLET_TOPUP.search(compact):
+        raise PaymentTextError("识别到充值到你自己的零钱/余额，属于资金划转，不计支出；如需记录请用原生表单")
     if not re.search(r"支付成功|付款成功|交易成功", text):
         raise PaymentTextError("未识别到成功付款状态，请提供完整的支付详情文字")
     if re.search(r"USD|EUR|HKD|JPY|美元|欧元|港币|日元|美金|\$|€", text, re.I):
@@ -620,7 +627,7 @@ def parse_payment_text(text: str, *, accounts: list[tuple[str, str | None]],
     merchant = merchants[0]
     warnings = []
     if campus_topup:
-        warnings.append("已选择充值时计支出；以后校园卡刷卡请勿重复记支出，其他入口不会自动排除重复账目")
+        warnings.append("校园卡充值按支出记录；以后校园卡刷卡请勿重复记支出，其他入口不会自动排除重复账目")
     times = _values(text, "交易时间|付款时间|支付时间")
     if not times and column_time:
         times = [column_time]

@@ -100,6 +100,6 @@ def test_display_title_fallback_does_not_hide_ambiguous_or_unpaid_receipts(text)
         parse_payment_text(text, accounts=[])
 
 
-def test_campus_charge_still_requires_explicit_preference():
-    with pytest.raises(PaymentTextError, match='充值'):
-        parse_payment_text(CAMPUS_BILL, accounts=[])
+def test_campus_charge_is_spending_without_a_separate_preference():
+    # User decision 2026-10-22: later campus-card spending is never captured again.
+    assert parse_payment_text(CAMPUS_BILL, accounts=[])['tx_drafts'][0]['type'] == 'expense'

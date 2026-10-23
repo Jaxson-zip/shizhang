@@ -117,9 +117,20 @@ SYNTHETIC_MERCHANT_0001
 """
 
 
-def test_split_campus_topup_requires_explicit_policy():
-    with pytest.raises(PaymentTextError, match="充值"):
-        parse_payment_text(CAMPUS_TOPUP_RECEIPT, accounts=[])
+def test_campus_topup_is_spending_without_a_separate_switch():
+    # User decision 2026-10-22: recharges paid to a merchant are booked as expenses.
+    assert parse_payment_text(CAMPUS_TOPUP_RECEIPT, accounts=[])["tx_drafts"][0]["type"] == "expense"
+
+
+def test_merchant_recharges_such_as_phone_bills_are_spending():
+    draft = parse_payment_text(CAMPUS_TOPUP_RECEIPT.replace("一卡通充\n值", "话费充值"), accounts=[])["tx_drafts"][0]
+    assert draft["type"] == "expense" and draft["amount"] == 30
+
+
+@pytest.mark.parametrize("wallet", ["零钱充值", "充值到余额", "转入余额宝充值"])
+def test_topping_up_the_users_own_wallet_is_still_refused(wallet):
+    with pytest.raises(PaymentTextError, match="资金划转"):
+        parse_payment_text(CAMPUS_TOPUP_RECEIPT.replace("一卡通充\n值", wallet), accounts=[])
 
 
 def test_explicit_campus_topup_policy_uses_merchant_label_and_spaced_date():
@@ -134,11 +145,11 @@ def test_explicit_campus_topup_policy_uses_merchant_label_and_spaced_date():
 
 
 @pytest.mark.parametrize("changed", [
-    CAMPUS_TOPUP_RECEIPT.replace("一卡通充\n值", "话费充值"),
+    CAMPUS_TOPUP_RECEIPT.replace("一卡通充\n值", "零钱充值"),
     CAMPUS_TOPUP_RECEIPT.replace("支付成功", "退款成功"),
     CAMPUS_TOPUP_RECEIPT + "\n转账",
 ])
-def test_campus_topup_policy_does_not_enable_other_topups_or_refunds(changed):
+def test_recharge_policy_does_not_enable_wallet_topups_or_refunds(changed):
     with pytest.raises(PaymentTextError):
         parse_payment_text(changed, accounts=[], campus_topup_as_expense=True)
 
@@ -150,7 +161,7 @@ def test_merchant_field_does_not_consume_miniprogram_label_prefix():
         parse_payment_text(text.replace("商户全称\n合成商户\n", ""), accounts=[])
 
 
-def test_campus_topup_api_requires_explicit_policy():
+def test_campus_topup_api_books_without_a_switch():
     client = _make_client()
     try:
         token, _ = _register_and_login(client, "ocr-campus@example.invalid")
@@ -158,7 +169,8 @@ def test_campus_topup_api_requires_explicit_policy():
         ledger = client.post("/api/v1/write/ledgers", headers=headers,
                              json={"base_change_id": 0, "ledger_name": "Synthetic campus", "currency": "CNY"}).json()["ledger_id"]
         body = {"text": CAMPUS_TOPUP_RECEIPT, "ledger_id": ledger, "engine": "rules"}
-        assert client.post("/api/v1/ai/parse-tx-text", headers=headers, json=body).status_code == 422
+        plain = client.post("/api/v1/ai/parse-tx-text", headers=headers, json=body)
+        assert plain.status_code == 200 and plain.json()["tx_drafts"][0]["amount"] == 30  # user decision 2026-10-22
         enabled = client.post("/api/v1/ai/parse-tx-text", headers=headers,
                               json={**body, "campus_topup_as_expense": True})
         assert enabled.status_code == 200, enabled.text
@@ -194,9 +206,9 @@ def test_saved_native_profile_defaults_remove_repeated_category_and_wallet_selec
         draft = response.json()["tx_drafts"][0]
         assert draft["account_name"] == "微信零钱"
         assert draft["category_name"] == "其他"
-        # A per-request opt-out beats the saved preference.
+        # The legacy flag no longer gates booking (user decision 2026-10-22).
         assert client.post("/api/v1/ai/parse-tx-text", headers=headers,
-                           json={**body, "campus_topup_as_expense": False}).status_code == 422
+                           json={**body, "campus_topup_as_expense": False}).status_code == 200
         # A wallet alias must never default a different funding source.
         other = client.post("/api/v1/ai/parse-tx-text", headers=headers,
                             json={**body, "text": text.replace("零钱", "未配置银行卡")})
@@ -232,7 +244,7 @@ def test_shortcut_campus_policy_forwards_to_native_write_and_replay():
         body = {"text": CAMPUS_TOPUP_RECEIPT.replace("2026年10月15日 12:04:11", stamp),
                 "ledger_id": ledger, "category_name": "其他"}
         endpoint = "/api/v1/ai/record-ocr-text"
-        assert client.post(endpoint, headers=headers, json=body).status_code == 422
+        assert client.post(endpoint, headers=headers, json=body).status_code == 200  # no switch needed any more
         enabled = {**body, "campus_topup_as_expense": True}
         saved = client.post(endpoint, headers=headers, json=enabled)
         assert saved.status_code == 200, saved.text

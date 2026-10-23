@@ -130,11 +130,21 @@ def test_new_template_does_not_identify_arbitrary_wallet_text_or_cross_channel_r
     assert payment_channel(MERCHANT+'\n支付宝') is None
 
 
-@pytest.mark.parametrize('text', [CAMPUS.replace('合成校园大学\n-20.00','另一个合成学校\n-20.00'),
-    CAMPUS.replace('合成一卡通>','其他充值>'),CAMPUS.replace('支付成功','支付失败')])
+@pytest.mark.parametrize('text', [CAMPUS.replace('支付成功','支付失败')])
 def test_campus_recovery_needs_exact_duplicate_title_and_card_context(text):
     with pytest.raises(PaymentTextError):
         parse_payment_text(text,accounts=[],campus_topup_as_expense=True)
+
+
+@pytest.mark.parametrize('text, note', [(CAMPUS.replace('合成一卡通>','其他充值>'), '合成校园大学'),
+    (CAMPUS.replace('合成校园大学\n-20.00','另一个合成学校\n-20.00'), '另一个合成学校')])
+def test_recharge_without_exact_card_context_is_plain_spending_without_the_campus_warning(text, note):
+    # User decision 2026-10-22: a merchant recharge is an expense; only campus cards get the warning,
+    # and the glued title is only split when it exactly repeats the bill title.
+    result = parse_payment_text(text, accounts=[])
+    draft = result['tx_drafts'][0]
+    assert draft['type'] == 'expense' and draft['amount'] == 20 and draft['note'] == note
+    assert not any('校园' in warning for warning in result['warnings'])
 
 
 def test_real_provider_error_retains_safe_code_without_secret_response_text():
