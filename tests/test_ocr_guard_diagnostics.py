@@ -9,7 +9,9 @@ from src.services.payment_rules import PaymentTextError, parse_payment_text
 
 
 @pytest.mark.parametrize('changed, expected', [
-    (QR.replace('-1.23', '−1.23'), {'qr_debit_count': 0, 'qr_status_count': 1}),
+    # An unsigned debit stays unrecognized. (The Unicode minus used here before is now read as the
+    # debit sign, 2026-10-23, so it no longer exercises the rejection log.)
+    (QR.replace('-1.23', '1.23'), {'qr_debit_count': 0, 'qr_status_count': 1}),
     (QR.replace('当前状态 支付成功', '当前状态\n收款方备注\n支付成功'), {'qr_debit_count': 1, 'qr_status_count': 0}),
 ])
 def test_rejected_layout_logs_only_structural_features(changed, expected, caplog):
