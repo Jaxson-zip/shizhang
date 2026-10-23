@@ -118,6 +118,37 @@ def _values(text: str, labels: str) -> list[str]:
     return [value for value in values if not field.fullmatch(value)]
 
 
+def _repair_garbled_date(line: str) -> str:
+    """A payment timestamp whose 年/月/日 OCR read as other characters ('2026410H23E 21:10:54').
+
+    Only a line that is exactly a date plus a clear hh:mm:ss, with exactly one way to split the
+    date into year, month and day separated by single misread characters, and a real date within
+    the last 30 days, is rewritten; anything else is left for the existing checks to refuse.
+    """
+    if re.match(r'\d{4}(?:年|-|/)\d{1,2}(?:月|-|/)\d{1,2}', line):
+        return line
+    match = re.fullmatch(r'(20\d{2})(\S{3,7}?)[ \t]*(\d{1,2}:\d{2}:\d{2})', line)
+    if not match:
+        return line
+    rest, found = match[2], []
+    for month_len in (1, 2):
+        for day_len in (1, 2):
+            if len(rest) != 3 + month_len + day_len:
+                continue
+            month, day = rest[1:1 + month_len], rest[2 + month_len:2 + month_len + day_len]
+            separators = rest[0] + rest[1 + month_len] + rest[-1]
+            if not (month.isdigit() and day.isdigit()) or separators.isdigit() or ' ' in separators:
+                continue
+            try:
+                found.append(datetime(int(match[1]), int(month), int(day)))
+            except ValueError:
+                continue
+    today = datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    if len(found) != 1 or not timedelta(days=-1) <= today - found[0] <= timedelta(days=30):
+        return line
+    return f'{found[0].year}年{found[0].month}月{found[0].day}日 {match[3]}'
+
+
 def _normalize_ocr_lines(text: str) -> tuple[str, bool]:
     """Normalize observed spacing/punctuation; uncertain money glyphs require review."""
     labels = sorted(['当前状态', '收款方备注', '收款详情', '转账说明', '支付方式', '付款方式',
@@ -145,6 +176,10 @@ def _normalize_ocr_lines(text: str) -> tuple[str, bool]:
         line = re.sub(r'(?<=\d)[ \t]*(?=[年月日:/-])|(?<=[年月:/-])[ \t]*(?=\d)', '', line)
         line = re.sub(r'^(扫码付款|扫二维码付款|群收款|转账)一(?=给|转给|来自)', r'\1-', line)
         line = re.sub(r'^[.·•][ \t]*(交易详情)$', r'\1', line)
+        # Em/en dash and the Unicode minus are the same debit sign (2026-10-23 capture),
+        # not a misread of another glyph, so they need no review.
+        line = re.sub(r'^[—–−][ \t]*(?=\d+(?:\.\d{2})?$)', '-', line)
+        line = _repair_garbled_date(line)
         match = re.fullmatch(r'([+一-])[ \t]*(\d+)[ \t]*([.·])[ \t]*(\d{2})', line)
         integer = re.fullmatch(r'([+一-])[ \t]*(\d+)', line)
         if match or integer:
