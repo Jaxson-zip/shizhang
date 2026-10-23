@@ -1078,37 +1078,57 @@ async def rebook_capture(db: Session, user: User, row: OcrCapture, ledger, *, ac
         base_change_id=0, expected_change_id=tx.source_change_id, happened_at=when,
         category_id=categories[0].sync_id, category_name=categories[0].name, category_kind=draft['type'],
         exclude_from_stats=saving, exclude_from_budget=saving)
+    from ...concurrency import lock_ledger_for_materialize
+    lock_ledger_for_materialize(db, ledger.id)
+    # The native update commits this same session. Stage the capture confirmation in that
+    # transaction so a failure before commit rolls both back; a failure after commit leaves
+    # both complete. Never commit the counted entry before its capture confirmation.
+    confirmed = db.execute(update(OcrCapture).where(OcrCapture.id == row.id, OcrCapture.status == 'pending',
+        OcrCapture.entity_id == tx.sync_id).values(status='confirmed', reason='新规则识别与临时账目一致，已自动计入'),
+        execution_options={'synchronize_session': False})
+    if confirmed.rowcount != 1:
+        db.rollback()
+        return 'changed'
     await update_tx(ledger_id=ledger.external_id, tx_id=tx.sync_id, req=change,
                     request=_internal_request('PATCH', base + '/' + tx.sync_id),
                     idempotency_key=f'ocr-rebook-{row.id}-{tx.source_change_id}', device_id='ocr-rules',
                     _scopes=set(), current_user=user, db=db)
-    confirmed = db.execute(update(OcrCapture).where(OcrCapture.id == row.id, OcrCapture.status == 'pending',
-        OcrCapture.entity_id == tx.sync_id).values(status='confirmed', reason='新规则识别与临时账目一致，已自动计入'),
-        execution_options={'synchronize_session': False})
-    db.commit()
-    if confirmed.rowcount == 1:
-        _discard_capture_image(row)
+    _discard_capture_image(row)
     logger.info('ocr.rules_rebook outcome=confirmed')
     return 'confirmed'
 
 
 async def rebook_pending(db: Session, *, days: int = 14, limit: int = 300) -> dict[str, int]:
-    """Sweep recent pending captures; one failing capture never stops the others."""
+    """Sweep the pending window in bounded pages; old failures never hide later captures."""
     from ...models import Ledger
-    rows = db.scalars(select(OcrCapture).where(
-        OcrCapture.status == 'pending',
-        OcrCapture.created_at >= datetime.now(timezone.utc) - timedelta(days=days)).order_by(
-        OcrCapture.created_at).limit(limit)).all()
+    started = datetime.now(timezone.utc)
+    cursor = None
     outcomes: dict[str, int] = {}
-    for row in rows:
-        try:
-            user, ledger = db.get(User, row.user_id), db.get(Ledger, row.ledger_id)
-            outcome = await rebook_capture(db, user, row, ledger) if user and ledger else 'missing'
-        except Exception as exc:  # noqa: BLE001 - logged by kind only, never capture content
-            db.rollback()
-            outcome = 'error'
-            logger.warning('ocr.rules_rebook_failed kind=%s', type(exc).__name__)
-        outcomes[outcome] = outcomes.get(outcome, 0) + 1
-    if rows:
+    if limit < 1:
+        return outcomes
+    while True:
+        query = select(OcrCapture).where(OcrCapture.status == 'pending',
+            OcrCapture.created_at >= started - timedelta(days=days), OcrCapture.created_at <= started)
+        if cursor is not None:
+            stamp, capture_id = cursor
+            query = query.where((OcrCapture.created_at > stamp) |
+                ((OcrCapture.created_at == stamp) & (OcrCapture.id > capture_id)))
+        rows = db.scalars(query.order_by(OcrCapture.created_at, OcrCapture.id).limit(limit)
+                          .execution_options(populate_existing=True)).all()
+        if not rows:
+            break
+        # Capture the cursor before commits/rollbacks expire these ORM instances. A fixed
+        # upper time bound keeps new incoming captures out of this finite scan.
+        cursor = (rows[-1].created_at, rows[-1].id)
+        for row in rows:
+            try:
+                user, ledger = db.get(User, row.user_id), db.get(Ledger, row.ledger_id)
+                outcome = await rebook_capture(db, user, row, ledger) if user and ledger else 'missing'
+            except Exception as exc:  # noqa: BLE001 - logged by kind only, never capture content
+                db.rollback()
+                outcome = 'error'
+                logger.warning('ocr.rules_rebook_failed kind=%s', type(exc).__name__)
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+    if outcomes:
         logger.info('ocr.rules_rebook sweep=%s', json.dumps(outcomes, sort_keys=True))
     return outcomes
