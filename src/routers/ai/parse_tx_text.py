@@ -860,16 +860,23 @@ async def reread_capture(capture_id: str, req: RereadCaptureRequest,
 async def reparse_capture(capture_id: str, req: RereadCaptureRequest,
                           _scopes: set[str] = Depends(_WRITE_SCOPE_DEP),
                           current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Free re-read of the stored OCR text with the current rules; no model, no new entry."""
+    """Free re-read of the stored OCR text with the current rules; no model. A decisive reading is
+    booked like a fresh capture (user request 2026-10-22); otherwise only the draft is filled."""
     row, ledger = _owned_capture(db, current_user, capture_id)
     action = {'id': str(req.action_id), 'before': req.expected_revision}
     last = (row.draft or {}).get('_rules_retry', {})
     if last.get('action') == action:
         return {**_inbox_item(row, ledger.external_id), 'message': last['message']}
+    if row.status == 'confirmed' and (row.draft or {}).get('_rules_rebook', {}).get('action') == action:
+        return {**_inbox_item(row, ledger.external_id), 'message': '新规则识别明确，已自动入账'}
     if row.status != 'pending' or row.entity_id or row.receipt:
         raise HTTPException(status_code=409, detail='只可重新识别尚未入账的待核对采集，已入账请核对原记录')
     if inbox_revision(row) != req.expected_revision:
         raise HTTPException(status_code=409, detail='采集已变化，请刷新后再识别')
+    if await rebook_capture(db, current_user, row, ledger, action=action) == 'booked':
+        db.refresh(row)
+        return {**_inbox_item(row, ledger.external_id), 'message': '新规则识别明确，已自动入账'}
+    db.refresh(row)
     original_draft = row.draft
     original_raw = db.scalar(select(cast(OcrCapture.draft, Text)).where(OcrCapture.id == row.id))
     recovered = None
@@ -974,3 +981,134 @@ def _discard_capture_image(row):
         ocr_images.forget(row.id, row.user_id)
     except (OSError, sqlite3.Error):
         logger.warning('ocr.image_cleanup_deferred')  # hourly sweep retries cleanup
+
+
+# --------------------------------------------------------------------------- automatic re-reading
+# User request 2026-10-22: when the rules improve, captures still waiting for review are re-read
+# automatically and booked like a fresh decisive capture, instead of waiting for a confirmation.
+# Same guards as a fresh channel-mode capture; the capture's fixed key "ocr-review-<id>" and the
+# capture-row CAS keep it to at most one entry. Vision-only readings are never booked here.
+
+def _internal_request(method: str, path: str) -> Request:
+    # The native write hashes method and path for idempotency and broadcasts through app.state.ws_manager.
+    from ...main import app
+    return Request({'type': 'http', 'method': method, 'path': path, 'headers': [], 'query_string': b'', 'app': app})
+
+
+async def rebook_capture(db: Session, user: User, row: OcrCapture, ledger, *, action: dict | None = None) -> str:
+    """Re-read one pending capture with the current rules and return an outcome label."""
+    from ...schemas import WriteTransactionUpdateRequest
+    from ...services.payment_rules import payment_review_reason
+    from ..write.transactions import update_tx
+    if row.status != 'pending':
+        return 'not_pending'
+    profile = db.scalar(select(UserProfile).where(UserProfile.user_id == user.id))
+    prefs = load_ocr_preferences(profile.ai_config_json if profile else None, ledger.external_id)
+    if prefs.get('accounting_mode') != 'channel':
+        return 'not_channel'
+    try:
+        parsed = await parse_tx_text(ParseTxTextRequest(text=row.text, ledger_id=ledger.external_id, engine='rules'),
+                                     _scopes=set(), current_user=user, db=db)
+    except HTTPException:
+        return 'rules_rejected'
+    if payment_review_reason(parsed, row.text, simplified=True):
+        return 'review'
+    draft = parsed['tx_drafts'][0]
+    stamp = draft['happened_at']
+    if not stamp and parsed.get('receipt_kind') == 'payment_result':
+        # A success page shows no time; a fresh capture uses its submission time, which is
+        # when this capture row was created.
+        stamp = row.created_at.replace(tzinfo=timezone.utc).isoformat()
+    if not stamp:
+        return 'no_time'
+    when = datetime.fromisoformat(stamp)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone(timedelta(hours=8)))
+    if when - datetime.now(timezone.utc) > timedelta(minutes=5):
+        return 'future'
+    accounts = db.scalars(select(UserAccountProjection).where(
+        UserAccountProjection.user_id == ledger.user_id, UserAccountProjection.name == draft['account_name'],
+        UserAccountProjection.hidden.is_(False),
+        (UserAccountProjection.currency == 'CNY') | UserAccountProjection.currency.is_(None))).all()
+    categories = db.scalars(select(UserCategoryProjection).where(
+        UserCategoryProjection.user_id == ledger.user_id, UserCategoryProjection.name == draft['category_name'],
+        UserCategoryProjection.kind == draft['type'])).all()
+    children = len(categories) == 1 and db.scalar(select(UserCategoryProjection.sync_id).where(
+        UserCategoryProjection.user_id == ledger.user_id, UserCategoryProjection.kind == draft['type'],
+        UserCategoryProjection.parent_name == categories[0].name).limit(1))
+    if len(accounts) != 1 or len(categories) != 1 or children:
+        return 'account_or_category'
+    saving = bool(prefs.get('alipay_saving_as_excluded_expense') is True and parsed.get('receipt_kind') == 'alipay_saving')
+    base = f'/api/v1/write/ledgers/{ledger.external_id}/transactions'
+    if row.entity_id is None and row.receipt is None:
+        native = WriteTransactionCreateRequest(
+            base_change_id=0, tx_type=draft['type'], amount=draft['amount'], happened_at=when, note=draft['note'],
+            account_id=accounts[0].sync_id, account_name=accounts[0].name,
+            category_id=categories[0].sync_id, category_name=categories[0].name, category_kind=draft['type'],
+            currency_code='CNY', native_amount=draft['amount'], exclude_from_stats=saving, exclude_from_budget=saving)
+        # Mark the capture as an automatic write first (CAS), so the native bind confirms it.
+        raw = cast(OcrCapture.draft, Text)
+        original_raw = db.scalar(select(raw).where(OcrCapture.id == row.id))
+        public = {k: v for k, v in draft.items() if not k.startswith('_')}
+        marked = {**(row.draft or {}), **public, '_auto_request': native.model_dump(mode='json'),
+                  '_rules_rebook': {'at': datetime.now(timezone.utc).isoformat(), 'action': action}}
+        changed = db.execute(update(OcrCapture).where(OcrCapture.id == row.id, OcrCapture.status == 'pending',
+            OcrCapture.entity_id.is_(None), OcrCapture.receipt.is_(None),
+            raw.is_(None) if original_raw is None else raw == original_raw).values(
+                draft=marked, reason='新规则识别明确，已自动入账'), execution_options={'synchronize_session': False})
+        if changed.rowcount != 1:
+            db.rollback()
+            return 'changed'
+        db.commit()
+        db.refresh(row)
+        await create_tx(ledger_id=ledger.external_id, req=native, request=_internal_request('POST', base),
+                        idempotency_key='ocr-review-' + row.id, device_id='ocr-rules',
+                        _scopes=set(), current_user=user, db=db)
+        logger.info('ocr.rules_rebook outcome=booked')
+        return 'booked'
+    # A provisional entry (excluded from stats, e.g. from a vision reading) that the rules now read
+    # independently with the same direction and amount becomes a counted entry.
+    tx = db.scalar(select(ReadTxProjection).where(ReadTxProjection.ledger_id == ledger.id,
+                                                  ReadTxProjection.sync_id == row.entity_id))
+    if tx is None or not tx.exclude_from_stats:
+        return 'linked'
+    if tx.tx_type != draft['type'] or abs(float(tx.amount) - float(draft['amount'])) > 0.005:
+        return 'mismatch'
+    change = WriteTransactionUpdateRequest(
+        base_change_id=0, expected_change_id=tx.source_change_id, happened_at=when,
+        category_id=categories[0].sync_id, category_name=categories[0].name, category_kind=draft['type'],
+        exclude_from_stats=saving, exclude_from_budget=saving)
+    await update_tx(ledger_id=ledger.external_id, tx_id=tx.sync_id, req=change,
+                    request=_internal_request('PATCH', base + '/' + tx.sync_id),
+                    idempotency_key=f'ocr-rebook-{row.id}-{tx.source_change_id}', device_id='ocr-rules',
+                    _scopes=set(), current_user=user, db=db)
+    confirmed = db.execute(update(OcrCapture).where(OcrCapture.id == row.id, OcrCapture.status == 'pending',
+        OcrCapture.entity_id == tx.sync_id).values(status='confirmed', reason='新规则识别与临时账目一致，已自动计入'),
+        execution_options={'synchronize_session': False})
+    db.commit()
+    if confirmed.rowcount == 1:
+        _discard_capture_image(row)
+    logger.info('ocr.rules_rebook outcome=confirmed')
+    return 'confirmed'
+
+
+async def rebook_pending(db: Session, *, days: int = 14, limit: int = 300) -> dict[str, int]:
+    """Sweep recent pending captures; one failing capture never stops the others."""
+    from ...models import Ledger
+    rows = db.scalars(select(OcrCapture).where(
+        OcrCapture.status == 'pending',
+        OcrCapture.created_at >= datetime.now(timezone.utc) - timedelta(days=days)).order_by(
+        OcrCapture.created_at).limit(limit)).all()
+    outcomes: dict[str, int] = {}
+    for row in rows:
+        try:
+            user, ledger = db.get(User, row.user_id), db.get(Ledger, row.ledger_id)
+            outcome = await rebook_capture(db, user, row, ledger) if user and ledger else 'missing'
+        except Exception as exc:  # noqa: BLE001 - logged by kind only, never capture content
+            db.rollback()
+            outcome = 'error'
+            logger.warning('ocr.rules_rebook_failed kind=%s', type(exc).__name__)
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+    if rows:
+        logger.info('ocr.rules_rebook sweep=%s', json.dumps(outcomes, sort_keys=True))
+    return outcomes

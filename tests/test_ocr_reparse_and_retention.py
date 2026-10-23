@@ -83,7 +83,8 @@ def _capture_unrecognized_received_page(client, headers, ledger, monkeypatch):
     return '/api/v1/ai/ocr-inbox/' + response.json()['capture_id']
 
 
-def test_rules_reparse_fills_the_draft_without_a_model_or_a_new_entry(monkeypatch):
+def test_rules_reparse_books_a_decisive_reading_once_without_a_model(monkeypatch):
+    # User request 2026-10-22: a decisive rules reading is booked, not left for another confirmation.
     from unittest.mock import AsyncMock, patch
     client = _make_client()
     try:
@@ -101,11 +102,11 @@ def test_rules_reparse_fills_the_draft_without_a_model_or_a_new_entry(monkeypatc
             assert client.post(path + '/reparse', headers=headers,
                                json={**action, 'action_id': str(uuid.uuid4())}).status_code == 409  # stale revision
         assert model.await_count == 0
-        draft = result.json()['draft']
-        assert draft['type'] == 'income' and draft['amount'] == 48 and draft['account_name'] == '微信零钱'
-        assert '新规则' in result.json()['reason'] and result.json()['entity_id'] is None
-        assert client.get('/api/v1/read/ledgers/' + ledger + '/transactions', headers=headers).json() == []
-        assert client.get(path, headers=headers).json()['status'] == 'pending'
+        assert '已自动入账' in result.json()['message']
+        rows = client.get('/api/v1/read/ledgers/' + ledger + '/transactions', headers=headers).json()
+        assert len(rows) == 1 and rows[0]['tx_type'] == 'income' and rows[0]['amount'] == 48
+        assert rows[0]['exclude_from_stats'] is False
+        assert client.get(path, headers=headers).json()['status'] == 'confirmed'
     finally:
         client.close()
         app.dependency_overrides.clear()

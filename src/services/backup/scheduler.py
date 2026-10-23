@@ -119,6 +119,11 @@ class BackupScheduler:
         self._scheduler.add_job(self._cleanup_ocr_images, 'interval', hours=1,
                                 id='ocr-image-expiry', replace_existing=True)
         self._cleanup_ocr_images()
+        # User request 2026-10-22: re-read pending captures with the current rules shortly after
+        # every deploy/restart (rules change only with a deploy) and then hourly.
+        from datetime import datetime, timedelta
+        self._scheduler.add_job(self._rebook_ocr_captures, 'interval', hours=1, id='ocr-rules-rebook',
+                                replace_existing=True, next_run_time=datetime.now(self._timezone) + timedelta(minutes=2))
         if settings.backup_scheduler_enabled:
             self.reload()
         else:
@@ -132,6 +137,27 @@ class BackupScheduler:
                 cleanup(db)
         except Exception as exc:
             logger.warning('ocr.image_sweep_failed kind=%s', type(exc).__name__)  # never log picture contents
+
+    @staticmethod
+    def _rebook_ocr_captures():
+        import asyncio
+
+        from ...main import app
+        from ...routers.ai.parse_tx_text import rebook_pending
+
+        async def sweep():
+            with SessionLocal() as db:
+                await rebook_pending(db)
+        try:
+            loop = getattr(app.state, 'main_loop', None)
+            if loop is not None and loop.is_running():
+                # Native writes broadcast over WebSockets owned by the server loop; sending them
+                # from this thread's own loop would fail and drop the user's live connections.
+                asyncio.run_coroutine_threadsafe(sweep(), loop).result(timeout=900)
+            else:
+                asyncio.run(sweep())
+        except Exception as exc:
+            logger.warning('ocr.rules_rebook_sweep_failed kind=%s', type(exc).__name__)  # never log capture contents
 
     def shutdown(self) -> None:
         if not self._started:
