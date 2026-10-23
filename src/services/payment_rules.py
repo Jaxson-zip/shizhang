@@ -137,7 +137,10 @@ def _repair_garbled_date(line: str) -> str:
                 continue
             month, day = rest[1:1 + month_len], rest[2 + month_len:2 + month_len + day_len]
             separators = rest[0] + rest[1 + month_len] + rest[-1]
-            if not (month.isdigit() and day.isdigit()) or separators.isdigit() or ' ' in separators:
+            # The 日 slot must be a misread non-digit: otherwise a dot date such as 2026.10.23
+            # would lose the day's last digit. At most one slot (here 年) may read as a digit.
+            if (not (month.isdigit() and day.isdigit()) or rest[-1].isdigit() or ' ' in separators
+                    or sum(ch.isdigit() for ch in separators) > 1):
                 continue
             try:
                 found.append(datetime(int(match[1]), int(month), int(day)))
@@ -178,7 +181,7 @@ def _normalize_ocr_lines(text: str) -> tuple[str, bool]:
         line = re.sub(r'^[.·•][ \t]*(交易详情)$', r'\1', line)
         # Em/en dash and the Unicode minus are the same debit sign (2026-10-23 capture),
         # not a misread of another glyph, so they need no review.
-        line = re.sub(r'^[—–−][ \t]*(?=\d+(?:\.\d{2})?$)', '-', line)
+        line = re.sub(r'^[—–−][ \t]*(?=\d+\.\d{2}$)', '-', line)  # an amount with cents, not a lone dash number
         line = _repair_garbled_date(line)
         match = re.fullmatch(r'([+一-])[ \t]*(\d+)[ \t]*([.·])[ \t]*(\d{2})', line)
         integer = re.fullmatch(r'([+一-])[ \t]*(\d+)', line)

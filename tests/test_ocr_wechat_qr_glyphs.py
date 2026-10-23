@@ -60,3 +60,19 @@ def test_unrecoverable_garbled_dates_are_not_guessed(date):
 def test_a_dash_inside_other_text_is_not_a_debit():
     with pytest.raises(PaymentTextError):
         parse(CAPTURED.replace('—6.00', '合成—6.00'))
+
+
+@pytest.mark.parametrize('line', [
+    f'{NOW.year}.{NOW.month}.{NOW.day} 12:00:00',        # dot date: must never become a different day
+    f'{NOW.year}-{NOW.month}{NOW.day:02d} 12:00:00',     # missing separator
+    f'{NOW.year}41{NOW.month}7{NOW.day}E 12:00:00',      # two digit separators: too ambiguous
+])
+def test_date_repair_never_invents_a_different_day(line):
+    from src.services.payment_rules import _repair_garbled_date
+    assert _repair_garbled_date(line) == line
+
+
+@pytest.mark.parametrize('line', ['—1', '— 2026', '–12'])
+def test_a_lone_dash_number_without_cents_is_not_a_debit(line):
+    from src.services.payment_rules import _normalize_ocr_lines
+    assert not _normalize_ocr_lines(line)[0].startswith('-')
