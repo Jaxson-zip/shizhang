@@ -30,10 +30,11 @@ def _detail(lines):
 
 
 def _checkout(lines):
+    # Small payments may earn no points, so 支付宝积分 is not required (2026-10-22 capture);
+    # the 交易方式 field plus an Alipay payment method is the page's own evidence.
     return ('支付成功' in lines and '完成' in lines
-            and any('支付宝积分' in line for line in lines)
             and any(re.match(r'^交易方式(?:\s|:|$)', line) for line in lines)
-            and '余额宝' in '\n'.join(lines))
+            and any(_METHOD.match(re.sub(r'^交易方式[ \t:]*', '', line)) for line in lines))
 
 
 def alipay_channel_evidence(text):
@@ -164,7 +165,8 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
     if lines.count('支付成功') > 1:
         raise error_type('支付宝出现多笔付款状态，请一次采集一笔')
     detail = _detail(lines)
-    end = next(i for i, line in enumerate(lines) if line.startswith('账单管理')) if detail else next(i for i, line in enumerate(lines) if '支付宝积分' in line)
+    end = (next(i for i, line in enumerate(lines) if line.startswith('账单管理')) if detail
+           else next((i for i, line in enumerate(lines) if '支付宝积分' in line), lines.index('完成')))
     body = lines[:end]
     compact = ''.join(body)
     if re.search(r'支付失败|交易失败|退款成功|退款中|退款金额|退款时间|已退款|已退回|待付款|等待付款|未支付|交易关闭|提现|信用卡还款|USD|EUR|HKD|JPY|美元|欧元|港币|日元|\$|€', compact, re.I):
@@ -245,8 +247,10 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
         pos = amounts[0][0]
         end_name = next((i for i, line in enumerate(body) if re.match(r'^交易方式(?:\s|:|$)', line)), len(body))
         names = [line for line in body[pos+1:end_name] if not re.fullmatch(r'[¥￥·*]\s*' + _MONEY, line)]
-        # OCR may list the 交易方式 label before the points/benefit lines and its value after them.
-        method = (_method_after_benefits(lines[end:], amount) if body and re.fullmatch(r'交易方式[ \t:]*', body[-1])
+        # A bare 交易方式 label has its value after the points/benefit lines and/or the payee-row
+        # amount (orders vary); otherwise the value is on the label line.
+        method = (_method_after_benefits(lines[end_name + 1:], amount)
+                  if end_name < len(body) and re.fullmatch(r'交易方式[ \t:]*', body[end_name])
                   else field('交易方式'))
         if len(names) != 1 or not 1 <= len(names[0]) <= 120 or not method:
             raise error_type('支付宝成功页收款对象或交易方式不明确')
