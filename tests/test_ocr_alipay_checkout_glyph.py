@@ -54,6 +54,11 @@ def test_ambiguous_success_pages_are_still_refused(text):
         parse(text)
 
 
+def test_conflicting_payee_amount_after_benefits_is_still_refused():
+    with pytest.raises(PaymentTextError):
+        parse(CAPTURED.replace('· 139.00', '· 12.00'))
+
+
 def test_channel_mode_books_the_success_page_once():
     client = _make_client()
     try:

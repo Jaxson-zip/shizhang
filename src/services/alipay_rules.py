@@ -100,6 +100,7 @@ def _visible_category(lines, end):
 
 
 _DATETIME = re.compile(r'\d{4}(?:-\d{1,2}-\d{1,2}|年\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}:\d{2}')
+_DATETIME_SCAN = re.compile(r'\d{4}(?:-\d{1,2}-\d{1,2}|年\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}(?::\d{2})?')
 _METHOD = re.compile(r'^(?:余额宝|花呗|账户余额|余额|.{1,12}(?:银行|信用卡|储蓄卡))')
 
 
@@ -121,8 +122,10 @@ def _restore_detail_columns(body):
     rest = body[:labels[0]] + body[labels[-1] + 1:]
     status -= len(labels)
     times = [label for label in run if label in ('支付时间', '付款时间', '创建时间')]
+    page_times = [line for line in body if re.match(r'^[\u4e00-\u9fff]{1,12}时间(?:[:\s\d]|$)', line)]
     dates = [i for i, line in enumerate(rest) if i > status and _DATETIME.fullmatch(line)]
-    if len(times) == 1 and len(dates) == 1:
+    visible_dates = sum(len(_DATETIME_SCAN.findall(line)) for line in body)
+    if len(times) == 1 and page_times == times and len(dates) == visible_dates == 1:
         k = dates[0]
         rest[k] = times[0] + ' ' + rest[k]
         if '付款方式' in run and k + 1 < len(rest) and _METHOD.match(rest[k + 1]):
@@ -130,10 +133,15 @@ def _restore_detail_columns(body):
     return rest
 
 
-def _method_after_benefits(lines):
+def _method_after_benefits(lines, amount):
     """The 交易方式 value listed after 支付宝积分+N / 体验金+N lines and the payee-row amount."""
     for line in lines[:6]:
-        if re.fullmatch(r'[一-鿿A-Za-z]{1,10}[+＋]\d+(?:\.\d+)?', line) or re.fullmatch(r'[¥￥·*]\s*' + _MONEY, line):
+        money = re.fullmatch(r'[¥￥·*]\s*(' + _MONEY + ')', line)
+        if money:
+            if Decimal(money[1].replace(',', '')) != amount:
+                return ''
+            continue
+        if re.fullmatch(r'[一-鿿A-Za-z]{1,10}[+＋]\d+(?:\.\d+)?', line):
             continue
         return line if _METHOD.match(line) else ''
     return ''
@@ -238,7 +246,7 @@ def parse_alipay_text(text, *, accounts, funding_aliases, default_category, chan
         end_name = next((i for i, line in enumerate(body) if re.match(r'^交易方式(?:\s|:|$)', line)), len(body))
         names = [line for line in body[pos+1:end_name] if not re.fullmatch(r'[¥￥·*]\s*' + _MONEY, line)]
         # OCR may list the 交易方式 label before the points/benefit lines and its value after them.
-        method = (_method_after_benefits(lines[end:]) if body and re.fullmatch(r'交易方式[ \t:]*', body[-1])
+        method = (_method_after_benefits(lines[end:], amount) if body and re.fullmatch(r'交易方式[ \t:]*', body[-1])
                   else field('交易方式'))
         if len(names) != 1 or not 1 <= len(names[0]) <= 120 or not method:
             raise error_type('支付宝成功页收款对象或交易方式不明确')

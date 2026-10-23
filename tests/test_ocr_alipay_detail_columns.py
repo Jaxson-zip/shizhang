@@ -93,6 +93,27 @@ def test_two_dates_below_the_status_leave_the_time_unset_for_review():
     assert parse(text)['tx_drafts'][0]['happened_at'] == ''
 
 
+@pytest.mark.parametrize('label', ['创建时间', '完成时间'])
+def test_unpaired_time_label_cannot_supply_payment_time(label):
+    text = FIVE.replace('2026-10-22 21:00:01', label+'\n2026-10-22 21:00:01')
+    assert parse(text)['tx_drafts'][0]['happened_at'] == ''
+
+
+@pytest.mark.parametrize('text', [
+    FIVE.replace('合成商品', '合成商品 有效期2026-10-22 22:00:00'),
+    FIVE.replace('合成商品', '合成商品 有效期2026-10-22 22:00'),
+    FIVE.replace('合成商户八个字名', '合成商户八个字名\n2026-10-22 20:00:00'),
+], ids=['embedded_seconds', 'embedded_minutes', 'above_status'])
+def test_dates_elsewhere_on_the_page_also_make_payment_time_ambiguous(text):
+    assert parse(text)['tx_drafts'][0]['happened_at'] == ''
+
+
+@pytest.mark.parametrize('wallet', ['充值余额宝', '余额宝充值', '充值到支付宝余额'])
+def test_explicit_own_wallet_recharge_remains_a_transfer(wallet):
+    with pytest.raises(PaymentTextError, match='资金划转'):
+        parse(FIVE.replace('合成商品', wallet))
+
+
 def test_channel_mode_books_the_column_detail_once():
     client = _make_client()
     try:

@@ -61,7 +61,7 @@ def load_ocr_preferences(raw: str | None, ledger_id: str) -> dict:
         return {}
 
 
-WALLET_TOPUP = re.compile(r"零钱充值|充值到零钱|零钱通|余额充值|充值到余额|账户余额充值|余额宝转入|转入余额宝")
+WALLET_TOPUP = re.compile(r"零钱充值|充值(?:到)?(?:微信)?零钱|零钱通|(?:支付宝)?(?:账户)?余额(?:宝)?充值|充值(?:到)?(?:支付宝)?(?:账户)?余额(?:宝)?|余额宝转入|转入余额宝")
 
 
 def payment_channel(text: str) -> str | None:

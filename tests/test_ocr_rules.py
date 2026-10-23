@@ -127,7 +127,8 @@ def test_merchant_recharges_such_as_phone_bills_are_spending():
     assert draft["type"] == "expense" and draft["amount"] == 30
 
 
-@pytest.mark.parametrize("wallet", ["零钱充值", "充值到余额", "转入余额宝充值"])
+@pytest.mark.parametrize("wallet", ["零钱充值", "充值到余额", "转入余额宝充值",
+                                    "充值余额宝", "余额宝充值", "充值到支付宝余额", "充值到微信零钱"])
 def test_topping_up_the_users_own_wallet_is_still_refused(wallet):
     with pytest.raises(PaymentTextError, match="资金划转"):
         parse_payment_text(CAMPUS_TOPUP_RECEIPT.replace("一卡通充\n值", wallet), accounts=[])
