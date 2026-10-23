@@ -49,7 +49,7 @@ export async function rereadCaptureImage(token: string, item: OcrInboxItem) {
     return result
   } finally { clearTimeout(timeout) }
 }
-/** Free rules-only re-read of the stored OCR text; never calls a model or creates an entry. */
+/** Free rules-only re-read; a decisive reading may book an entry without calling a model. */
 export async function reparseCapture(token: string, item: OcrInboxItem) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 20_000)

@@ -117,6 +117,8 @@ it('offers the free rules re-read only for unbooked pending captures', () => {
     items={items} total={items.length} loading={false} error="" view={view} onRetry={() => {}} onMore={() => {}} onReview={() => {}} onReparse={() => {}} /></LocaleProvider>)
   expect(panel([{ ...item, entity_id: null, draft: null }])).toContain('用新规则重新识别')
   expect(panel([{ ...item, entity_id: null, draft: null }])).toContain('免费、不调用模型')
+  expect(panel([{ ...item, entity_id: null, draft: null }])).toContain('规则明确时自动入账')
+  expect(panel([{ ...item, entity_id: null, draft: null }])).toContain('仍不明确的保留待核对')
   expect(panel([item])).not.toContain('用新规则重新识别')                                   // already linked to an entry
   expect(panel([{ ...item, entity_id: null, draft: null }], 'ignored')).not.toContain('用新规则重新识别')
 })

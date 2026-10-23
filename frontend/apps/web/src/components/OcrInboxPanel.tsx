@@ -42,7 +42,7 @@ export function OcrInboxPanel({ items, total, loading, error, busy, onRetry, onM
     <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{view === 'ignored'
       ? '这些采集尚未入账。原文仍保留，恢复后可继续补全；忽略和恢复都不增删账目。'
       : view === 'recent' ? '最近 48 小时自动记账的采集。截图保留 48 小时，方便对照账目，到期自动删除。'
-      : '付款时先收下，方便时再看。视觉补读等需核对的账目先记为临时账目，暂不计收支统计，确认后才计入；金额或方向不明的内容尚未入账。'}</p>
+      : '系统会用新规则定时重读：明确的自动入账，不明确的保留待核对；视觉补读等临时账目暂不计收支统计，规则确认或你核对后才计入。'}</p>
     {notice ? <div role="status" className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/50 p-3 text-sm"><span>{notice.text}</span>{notice.undo ? <Button variant="outline" className="min-h-11" disabled={Boolean(busy)} onClick={notice.undo}>撤销忽略</Button> : null}</div> : null}
     {loading ? <p role="status" className="mt-3 text-sm">正在读取待核对内容…</p> : null}
     {error ? <p role="alert" className="mt-3 text-sm text-destructive">{error} <button type="button" disabled={loading || Boolean(busy)} className="min-h-11 underline" onClick={onRetry}>重新读取</button></p> : null}
@@ -65,7 +65,7 @@ export function OcrInboxPanel({ items, total, loading, error, busy, onRetry, onM
           : '临时截图未上传或已清理；原文与账目不受影响。'}</p> : null}
         {source?.id === item.id ? <CapturePictureView loading={source.loading} imageUrl={source.imageUrl} error={source.error || source.imageError} /> : null}
         {view === 'pending' && !item.entity_id && onReparse ? <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/30 p-3">
-          <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">用当前的识别规则重新读一遍已保存的文字，免费、不调用模型；仅更新草稿，不新增账目。</p>
+          <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">用当前规则重读已保存的文字，免费、不调用模型；规则明确时自动入账，仍不明确的保留待核对。</p>
           <Button variant="outline" className="min-h-11" disabled={loading || Boolean(busy)} onClick={() => onReparse(item)}>{busy === item.id ? '正在处理…' : '用新规则重新识别'}</Button>
         </div> : null}
         {view === 'pending' && !item.entity_id && item.image?.available && onReread ? <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/30 p-3">

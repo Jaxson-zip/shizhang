@@ -95,7 +95,7 @@ export function OcrInboxSection() {
       if (operation === operations.current) setError('操作结果尚未确认或状态已变化，请查看待核对及已忽略列表后再操作；账目不会因此新建或删除。')
     } finally { if (operation === operations.current) { busyRef.current = ''; setBusy('') } }
   }
-  // Both re-reads only update the draft; neither creates an entry.
+  // Rules may book a decisive reading; vision only updates the draft.
   const redraft = async (item: OcrInboxItem, run: typeof reparseCapture, failure: string) => {
     if (busyRef.current || item.ledger_id !== activeLedgerId) return
     const operation = ++operations.current
@@ -115,7 +115,7 @@ export function OcrInboxSection() {
   const reread = (item: OcrInboxItem) => redraft(item, rereadCaptureImage,
     '截图已清理、采集已变化或识别结果未确认，请刷新查看。此操作不会新增账目，请勿连续重试。')
   const reparse = (item: OcrInboxItem) => redraft(item, reparseCapture,
-    '采集已变化或识别结果未确认，请刷新查看。此操作不会新增账目。')
+    '识别结果尚未确认或采集已变化。请刷新账目和待核对列表，确认是否已入账；请勿另记或连续重试。')
   const review = async (item: OcrInboxItem, type: TxForm['tx_type']) => {
     if (busyRef.current) return
     const operation = ++operations.current
